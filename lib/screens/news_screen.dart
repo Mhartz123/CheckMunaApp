@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
 
 /// One news/advisory item. These are placeholder entries for now — the app has
@@ -59,12 +60,15 @@ const List<_NewsItem> _fillerNews = [
 ];
 
 class NewsScreen extends StatelessWidget {
-  final VoidCallback onScanTap;
+  /// Opens the camera in the chosen inspection mode. The two entry buttons at
+  /// the top of this screen are the app's main way in — label compliance and
+  /// physical damage are separate checks and never run together.
+  final ValueChanged<ScanType> onStartScan;
   final VoidCallback onRecordsTap;
 
   const NewsScreen({
     super.key,
-    required this.onScanTap,
+    required this.onStartScan,
     required this.onRecordsTap,
   });
 
@@ -100,7 +104,7 @@ class NewsScreen extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       const Text(
-                        'VerifyDA',
+                        'Label Check',
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -120,6 +124,38 @@ class NewsScreen extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
                 children: [
+                  // ── The two inspections ────────────────────────────────
+                  Text(
+                    'Start a check',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.accentLight,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _CheckButton(
+                    icon: Icons.fact_check_outlined,
+                    title: 'Label Check',
+                    subtitle:
+                        'Photograph the product name, expiration date and '
+                        'ingredient list to verify the label.',
+                    color: AppColors.accentLight,
+                    onTap: () => onStartScan(ScanType.label),
+                  ),
+                  const SizedBox(height: 10),
+                  _CheckButton(
+                    icon: Icons.broken_image_outlined,
+                    title: 'Physical Damage Check',
+                    subtitle:
+                        'Photograph all four sides of the box to inspect the '
+                        'packaging for damage.',
+                    color: const Color(0xFF1E88E5),
+                    onTap: () => onStartScan(ScanType.damage),
+                  ),
+                  const SizedBox(height: 22),
+
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -159,25 +195,11 @@ class NewsScreen extends StatelessWidget {
 
                   const SizedBox(height: 2),
 
-                  // Shortcut buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _ShortcutButton(
-                          icon: Icons.camera_alt_outlined,
-                          label: 'Camera',
-                          onTap: onScanTap,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _ShortcutButton(
-                          icon: Icons.list_alt_outlined,
-                          label: 'Records',
-                          onTap: onRecordsTap,
-                        ),
-                      ),
-                    ],
+                  // Shortcut to saved reports
+                  _ShortcutButton(
+                    icon: Icons.list_alt_outlined,
+                    label: 'Records',
+                    onTap: onRecordsTap,
                   ),
                 ],
               ),
@@ -255,6 +277,83 @@ class _NewsCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A primary entry card for one of the two inspections.
+class _CheckButton extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _CheckButton({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: title,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: color.withValues(alpha: 0.45), width: 1.5),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.muted,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right, color: color, size: 20),
+            ],
+          ),
+        ),
       ),
     );
   }

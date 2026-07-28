@@ -6,6 +6,7 @@ import 'screens/home_screen.dart';
 import 'screens/camera_screen.dart';
 import 'screens/news_screen.dart';
 import 'screens/records_screen.dart';
+import 'models/scan_record.dart';
 import 'widgets/floating_nav_bar.dart';
 import 'theme/app_colors.dart';
 
@@ -26,7 +27,7 @@ class UIPrototypeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'VerifyDA',
+      title: 'Label Check',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -99,8 +100,19 @@ class _AppShellState extends State<AppShell> {
   // 0 = News, 1 = Scan, 2 = Records
   int _currentIndex = 0;
 
+  /// Which inspection the camera tab is set to run. Chosen from the two
+  /// buttons on the News/home tab; tapping the centre Scan button on its own
+  /// re-opens whichever check was last picked.
+  ScanType _scanMode = ScanType.label;
+
   final GlobalKey<RecordsScreenState> _recordsKey =
   GlobalKey<RecordsScreenState>();
+
+  /// Home-tab entry point: pick an inspection and jump to the camera.
+  void _startScan(ScanType mode) {
+    if (mode != _scanMode) setState(() => _scanMode = mode);
+    _switchTab(1);
+  }
 
   void _switchTab(int index) {
     if (index == _currentIndex) return;
@@ -131,10 +143,10 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final screens = [
       NewsScreen(
-        onScanTap: () => _switchTab(1),
+        onStartScan: _startScan,
         onRecordsTap: () => _switchTab(2),
       ),
-      const CameraScreen(),
+      CameraScreen(mode: _scanMode),
       RecordsScreen(key: _recordsKey),
     ];
 

@@ -6,25 +6,8 @@ import 'fda_dataset_checker.dart';
 import 'label_parser.dart';
 import 'onnx_semantic_matcher.dart';
 
-/// Orchestrates a full scan analysis into one [ScanRecord] using a fixed
-/// compliance pipeline:
-///
-///  • **Banned (warned):** the product name is checked against the FDA
-///    advisory/banned list — [FdaDatasetChecker] (word-overlap + fuzzy), with
-///    [OnnxSemanticMatcher] as a removable last-ditch tier when the name OCR
-///    was low-confidence. A hit here (and only here) means banned. If the name
-///    isn't on the list, it is not flagged as banned.
-///  • **Otherwise non-compliant if any of:**
-///      - the printed expiration date has passed (expired);
-///      - the user verified no expiration date is printed on the packaging;
-///      - no ingredient list was detected, or the user verified none is printed
-///        on the packaging;
-///      - the box-damage model reports severe damage (≥ [_damageConfidenceThreshold])
-///        or scratches ([DamageDetectionService]).
-///  • **Compliant** when none of the above fire.
-///
-/// UI, storage, and report submission consume [ScanRecord] only.
-enum ScanStage { matchingRegistry, classifying, checkingDamage }
+/// Analysis stages for the label pipeline, surfaced as progress in the UI.
+enum ScanStage { matchingRegistry, classifying }
 
 class ComplianceEngine {
   /// The ONNX semantic matcher — removable last-ditch tier of the banned-name
@@ -42,36 +25,44 @@ class ComplianceEngine {
   /// which the name is treated as unreliable, opening the semantic fallback.
   static const double _lowOcrConfidenceThreshold = 0.6;
 
-  /// Minimum damage-detection confidence (0..1) for "severe" packaging damage
-  /// to count as non-compliant. Scratches fail regardless of confidence.
-  static const double _damageConfidenceThreshold = 0.70;
-
-  /// Kicks off the model + FDA dataset asset loads early (e.g. from
-  /// CameraScreen.initState) so the first scan's analyze() call isn't stuck
-  /// paying full load latency while the user is still framing photos.
-  static void warmUp() {
+  /// Kicks off the asset loads for [type]'s pipeline early (from
+  /// CameraScreen.initState) so the first scan isn't stuck paying full load
+  /// latency while the user is still framing photos. Each mode only warms the
+  /// models it actually uses.
+  static void warmUp(ScanType type) {
+    if (type == ScanType.damage) {
+      // ignore: unawaited_futures
+      DamageDetectionService.warmUp();
+      return;
+    }
     // ignore: unawaited_futures
     FdaDatasetChecker.ensureLoaded();
-    // ignore: unawaited_futures
-    DamageDetectionService.warmUp();
     if (_semanticMatcherEnabled) {
       // ignore: unawaited_futures
       OnnxSemanticMatcher.instance();
     }
   }
 
+  /// Runs the **label compliance** inspection — the first of the app's two
+  /// independent checks. No box photos and no damage detection are involved.
+  ///
+  ///  • **Banned (warned):** the product name is checked against the FDA
+  ///    advisory/banned list — [FdaDatasetChecker] (word-overlap + fuzzy), with
+  ///    [OnnxSemanticMatcher] as a removable last-ditch tier when the name OCR
+  ///    was low-confidence. A hit here (and only here) means banned.
+  ///  • **Otherwise non-compliant if any of:** the printed expiration date has
+  ///    passed; the user verified no expiration date is printed; no ingredient
+  ///    list was detected or the user verified none is printed.
+  ///  • **Compliant** when none of the above fire.
+  ///
   /// [textBySlot] maps each captured label [PhotoSlot] to the OCR text
   /// extracted from that slot's (guide-cropped) photo (see LabelParser).
   /// [combinedText] concatenates all label slots' text, used for the
-  /// registry/name match.
-  ///
-  /// [boxPhotoPaths] are the separate full-frame box shots fed to the damage
-  /// API. [ocrConfidence] is the mean ML Kit confidence (0..1) on the
-  /// product-name crop (or null): it gates the last-ditch semantic tier.
-  static Future<ScanRecord> analyze({
+  /// registry/name match. [ocrConfidence] is the mean ML Kit confidence (0..1)
+  /// on the product-name crop (or null): it gates the last-ditch semantic tier.
+  static Future<ScanRecord> analyzeLabel({
     required Map<PhotoSlot, String> textBySlot,
     required String combinedText,
-    required List<String> boxPhotoPaths,
     double? ocrConfidence,
     bool expirationDeclaredMissing = false,
     bool ingredientsDeclaredMissing = false,
@@ -102,48 +93,52 @@ class ComplianceEngine {
       }
     }
 
-    // Packaging damage runs on the dedicated box photos only.
-    onStageChange?.call(ScanStage.checkingDamage);
-    final DamageCheckResult damage =
-        await DamageDetectionService.check(boxPhotoPaths);
-
     // ── Combine signals into a compliance verdict ──────────────────────────
     final bool banned = advisoryMatch != null || semanticMatch != null;
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final bool expired = fields.expirationDate != null &&
-        today.isAfter(fields.expirationDate!);
+    final bool expired =
+        fields.expirationDate != null && today.isAfter(fields.expirationDate!);
     // The user can verify on-camera that an element simply isn't printed on the
     // packaging; that declaration alone fails compliance (the label is absent),
     // independent of whatever OCR did or didn't read.
     final bool expirationMissing = expirationDeclaredMissing;
     final bool ingredientsMissing =
         ingredientsDeclaredMissing || !fields.ingredientsPresent;
-    final bool damageFails = damage.available &&
-        damage.isDamaged &&
-        (damage.maxConfidence >= _damageConfidenceThreshold ||
-            damage.hasScratch);
+    final bool productNameMissing = fields.productName == 'Unknown Product';
+
+    // The report's headline yes/no: were all three required label elements
+    // found on the packaging? This is about *presence*, not validity — an
+    // expiration date that is present but expired still counts as present.
+    //
+    // Product-name presence is reported but deliberately kept out of the
+    // verdict below: an unreadable front crop is an OCR failure, not proof the
+    // packaging lacks a name, and it never failed compliance before the
+    // label/damage split either. So a scan whose name OCR came back empty can
+    // read "Compliant" with "All labels present: No".
+    final bool allLabelsPresent =
+        !productNameMissing && !expirationMissing && !ingredientsMissing;
 
     final ComplianceStatus status = banned
         ? ComplianceStatus.banned
-        : (expired || expirationMissing || ingredientsMissing || damageFails)
+        : (expired || expirationMissing || ingredientsMissing)
             ? ComplianceStatus.nonCompliant
             : ComplianceStatus.compliant;
 
-    final reasons = _buildReasons(
+    final reasons = _buildLabelReasons(
       status: status,
       advisoryMatch: advisoryMatch,
       semanticMatch: semanticMatch,
       fields: fields,
       expired: expired,
       expirationMissing: expirationMissing,
+      ingredientsDeclaredMissing: ingredientsDeclaredMissing,
       ingredientsMissing: ingredientsMissing,
-      damageFails: damageFails,
-      damage: damage,
     );
 
     return ScanRecord(
+      type: ScanType.label,
       status: status,
       matchedKeyword: _matchedLabel(
         advisoryMatch: advisoryMatch,
@@ -151,13 +146,45 @@ class ComplianceEngine {
         expired: expired,
         expirationMissing: expirationMissing,
         ingredientsMissing: ingredientsMissing,
-        damageFails: damageFails,
       ),
       reasons: reasons,
       productName: fields.productName,
       expiration: fields.expiration,
       ingredients: fields.ingredients,
+      allLabelsPresent: allLabelsPresent,
       extractedText: combinedText,
+      damageCheck: const DamageCheckResult.placeholder(),
+      scannedAt: DateTime.now(),
+    );
+  }
+
+  /// Runs the **physical damage** inspection — the second of the app's two
+  /// independent checks. No OCR, no FDA registry: just the box photos through
+  /// the on-device YOLO11n detector.
+  ///
+  /// The resulting record's [ScanRecord.status] mirrors the damage outcome
+  /// (damaged → non-compliant) so records can still be filtered and counted
+  /// alongside label checks, but damage reports are presented in their own
+  /// wording — see [ScanRecordUi.damageTitle].
+  static Future<ScanRecord> analyzeDamage({
+    required Map<BoxSlot, String> boxPhotoPaths,
+  }) async {
+    final DamageCheckResult damage =
+        await DamageDetectionService.check(boxPhotoPaths);
+
+    final bool damaged = damage.available && damage.isDamaged;
+
+    return ScanRecord(
+      type: ScanType.damage,
+      status:
+          damaged ? ComplianceStatus.nonCompliant : ComplianceStatus.compliant,
+      matchedKeyword: damaged ? damage.damageTypes.join(', ') : '—',
+      reasons: _buildDamageReasons(damage),
+      productName: '—',
+      expiration: '—',
+      ingredients: '—',
+      allLabelsPresent: false,
+      extractedText: '',
       damageCheck: damage,
       scannedAt: DateTime.now(),
     );
@@ -169,7 +196,6 @@ class ComplianceEngine {
     required bool expired,
     required bool expirationMissing,
     required bool ingredientsMissing,
-    required bool damageFails,
   }) {
     if (advisoryMatch != null) return advisoryMatch.productName;
     if (semanticMatch != null) {
@@ -180,21 +206,19 @@ class ComplianceEngine {
       if (expired) 'expired',
       if (expirationMissing) 'no expiration date',
       if (ingredientsMissing) 'no ingredient list',
-      if (damageFails) 'packaging damage',
     ];
     return tags.isEmpty ? '—' : tags.join(', ');
   }
 
-  static List<String> _buildReasons({
+  static List<String> _buildLabelReasons({
     required ComplianceStatus status,
     required FdaAdvisoryMatch? advisoryMatch,
     required SemanticMatch? semanticMatch,
     required LabelFields fields,
     required bool expired,
     required bool expirationMissing,
+    required bool ingredientsDeclaredMissing,
     required bool ingredientsMissing,
-    required bool damageFails,
-    required DamageCheckResult damage,
   }) {
     if (status == ComplianceStatus.compliant) return const [];
 
@@ -225,18 +249,23 @@ class ComplianceEngine {
           '(verified by the user).');
     }
     if (ingredientsMissing) {
-      reasons.add('No ingredient list was detected on the label.');
-    }
-    if (damageFails) {
-      final detail = damage.hasScratch
-          ? 'scratches detected'
-          : 'severe damage detected '
-              '(${(damage.maxConfidence * 100).toStringAsFixed(0)}% confidence)';
-      reasons.add('Packaging damage — $detail.');
+      reasons.add(ingredientsDeclaredMissing
+          ? 'No ingredient list is printed on the packaging (verified by the user).'
+          : 'No ingredient list was detected on the label.');
     }
     if (reasons.isEmpty) {
       reasons.add('Could not confirm compliance from the scanned label.');
     }
     return reasons;
+  }
+
+  static List<String> _buildDamageReasons(DamageCheckResult damage) {
+    if (!damage.available) return [damage.message];
+    if (!damage.isDamaged) return const [];
+    return [
+      for (final finding in damage.findings) finding.summary,
+      'Damaged packaging may compromise the product. Do not sell or consume; '
+          'report to the FDA hotline.',
+    ];
   }
 }

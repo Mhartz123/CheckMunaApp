@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
+import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -22,6 +23,10 @@ class RecordsScreenState extends State<RecordsScreen> {
   bool _nameAscending = true;
   bool _dateNewest = true;
   String _complianceFilter = '';
+
+  /// Narrows the list to one kind of check; null shows both.
+  ScanType? _typeFilter;
+
   String _searchQuery = '';
   final Set<String> _selected = {};
   bool _isSelecting = false;
@@ -58,6 +63,9 @@ class RecordsScreenState extends State<RecordsScreen> {
           .toLowerCase()
           .contains(_searchQuery.toLowerCase()))
           .toList();
+    }
+    if (_typeFilter != null) {
+      list = list.where((d) => ScanStore.load(d)?.type == _typeFilter).toList();
     }
     if (_complianceFilter.isNotEmpty) {
       list = list.where((d) {
@@ -284,6 +292,61 @@ class RecordsScreenState extends State<RecordsScreen> {
     );
   }
 
+  void _toggleTypeFilter(ScanType type) {
+    setState(() {
+      _typeFilter = _typeFilter == type ? null : type;
+      // "Banned" has no damage-check equivalent and its chip is hidden below,
+      // so drop it rather than leave an invisible filter emptying the list.
+      if (_typeFilter == ScanType.damage &&
+          _complianceFilter == 'WARNING / BANNED') {
+        _complianceFilter = '';
+      }
+    });
+    _applySort();
+  }
+
+  /// Outcome chips for the current type filter. A damage record's status is
+  /// stored on the same COMPLIANT / NON-COMPLIANT scale as a label record's,
+  /// but it means something different — so when the list is narrowed to damage
+  /// checks the chips are worded for damage and "Banned" (label-only) drops.
+  List<Widget> _outcomeChips() {
+    final damageOnly = _typeFilter == ScanType.damage;
+
+    void toggle(String value) {
+      setState(() =>
+          _complianceFilter = _complianceFilter == value ? '' : value);
+      _applySort();
+    }
+
+    return [
+      const Text('Filter :',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+      const SizedBox(width: 8),
+      _SortChip(
+        label: damageOnly ? 'No damage' : 'Compliant',
+        selected: _complianceFilter == 'COMPLIANT',
+        color: const Color(0xFF4CAF50),
+        onTap: () => toggle('COMPLIANT'),
+      ),
+      const SizedBox(width: 6),
+      _SortChip(
+        label: damageOnly ? 'Damaged' : 'Non-Compliant',
+        selected: _complianceFilter == 'NON-COMPLIANT',
+        color: const Color(0xFFFF9800),
+        onTap: () => toggle('NON-COMPLIANT'),
+      ),
+      if (!damageOnly) ...[
+        const SizedBox(width: 6),
+        _SortChip(
+          label: 'Banned',
+          selected: _complianceFilter == 'WARNING / BANNED',
+          color: const Color(0xFFF44336),
+          onTap: () => toggle('WARNING / BANNED'),
+        ),
+      ],
+    ];
+  }
+
   // ── Generate PDF report ───────────────────────────────────────────────────
   Future<void> _generateReport() async {
     // Show loading indicator
@@ -303,7 +366,7 @@ class RecordsScreenState extends State<RecordsScreen> {
       // Open the built-in PDF preview (includes share + print buttons)
       await Printing.layoutPdf(
         onLayout: (_) async => pdf.save(),
-        name: 'VerifyDA_Compliance_Report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        name: 'Label_Check_Compliance_Report_${DateTime.now().millisecondsSinceEpoch}.pdf',
       );
     } catch (e) {
       if (!mounted) return;
@@ -382,44 +445,32 @@ class RecordsScreenState extends State<RecordsScreen> {
                   ],
                 ),
                 const SizedBox(height: 6),
+                // Report type — the two checks are separate features, so this
+                // row comes first and narrows what the status chips below act
+                // on.
+                Row(
+                  children: [
+                    const Text('Type :',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w500)),
+                    const SizedBox(width: 8),
+                    _SortChip(
+                        label: 'Label',
+                        selected: _typeFilter == ScanType.label,
+                        color: AppColors.accentLight,
+                        onTap: () => _toggleTypeFilter(ScanType.label)),
+                    const SizedBox(width: 6),
+                    _SortChip(
+                        label: 'Damage',
+                        selected: _typeFilter == ScanType.damage,
+                        color: const Color(0xFF1E88E5),
+                        onTap: () => _toggleTypeFilter(ScanType.damage)),
+                  ],
+                ),
+                const SizedBox(height: 6),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      const Text('Filter :',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                      const SizedBox(width: 8),
-                      _SortChip(
-                          label: 'Compliant',
-                          selected: _complianceFilter == 'COMPLIANT',
-                          color: const Color(0xFF4CAF50),
-                          onTap: () {
-                            setState(() => _complianceFilter =
-                            _complianceFilter == 'COMPLIANT' ? '' : 'COMPLIANT');
-                            _applySort();
-                          }),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                          label: 'Non-Compliant',
-                          selected: _complianceFilter == 'NON-COMPLIANT',
-                          color: const Color(0xFFFF9800),
-                          onTap: () {
-                            setState(() => _complianceFilter =
-                            _complianceFilter == 'NON-COMPLIANT' ? '' : 'NON-COMPLIANT');
-                            _applySort();
-                          }),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                          label: 'Banned',
-                          selected: _complianceFilter == 'WARNING / BANNED',
-                          color: const Color(0xFFF44336),
-                          onTap: () {
-                            setState(() => _complianceFilter =
-                            _complianceFilter == 'WARNING / BANNED' ? '' : 'WARNING / BANNED');
-                            _applySort();
-                          }),
-                    ],
-                  ),
+                  child: Row(children: _outcomeChips()),
                 ),
               ],
             ),
@@ -605,6 +656,40 @@ class _SortChip extends StatelessWidget {
   }
 }
 
+// ── Report type badge ────────────────────────────────────────────────────────
+
+/// Marks which of the two checks produced a record, so the mixed list stays
+/// readable at a glance.
+class _TypeBadge extends StatelessWidget {
+  final ScanType type;
+
+  const _TypeBadge({required this.type});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = type == ScanType.label
+        ? AppColors.accent
+        : const Color(0xFF1565C0);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        type.shortLabel,
+        style: TextStyle(
+          fontSize: 9.5,
+          color: color,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+}
+
 // ── Record card ──────────────────────────────────────────────────────────────
 
 class _RecordCard extends StatelessWidget {
@@ -632,51 +717,112 @@ class _RecordCard extends StatelessWidget {
       '${dt.year} / ${_pad(dt.month)} / ${_pad(dt.day)}';
   String _pad(int n) => n.toString().padLeft(2, '0');
 
-  // Maps the saved status string to icon + colors for the leading circle.
-  ({IconData icon, Color bg, Color fg, Color pillBg, Color pillText}) _statusVisuals(
-      String status) {
-    switch (status) {
-      case 'COMPLIANT':
-        return (
-        icon: Icons.check,
-        bg: AppColors.compliantBg,
-        fg: AppColors.compliantText,
-        pillBg: AppColors.compliantBg,
-        pillText: AppColors.compliantText,
-        );
-      case 'NON-COMPLIANT':
-        return (
-        icon: Icons.warning_amber_rounded,
-        bg: AppColors.nonCompliantBg,
-        fg: AppColors.nonCompliantText,
-        pillBg: AppColors.nonCompliantBg,
-        pillText: AppColors.nonCompliantText,
-        );
-      case 'WARNING / BANNED':
-        return (
-        icon: Icons.block,
-        bg: AppColors.bannedBg,
-        fg: AppColors.bannedText,
-        pillBg: AppColors.bannedBg,
-        pillText: AppColors.bannedText,
-        );
-      default:
-        return (
+  /// Icon + colours + pill text for the card, worded for the record's own kind
+  /// of check. A damage record stores its outcome on the same status scale as
+  /// a label record, but "NON-COMPLIANT" there means "damaged" — so the pill
+  /// never shows compliance wording on a damage card.
+  ({IconData icon, Color bg, Color fg, String pill}) _visuals(
+      ScanRecord? record) {
+    if (record == null) {
+      return (
         icon: Icons.image_outlined,
         bg: AppColors.surfaceAlt,
         fg: AppColors.muted,
-        pillBg: AppColors.surfaceAlt,
-        pillText: AppColors.muted,
+        pill: '—',
+      );
+    }
+
+    if (record.isDamageCheck) {
+      final damage = record.damageCheck;
+      if (!damage.available) {
+        return (
+          icon: Icons.help_outline,
+          bg: AppColors.surfaceAlt,
+          fg: AppColors.muted,
+          pill: 'CHECK UNAVAILABLE',
+        );
+      }
+      return damage.isDamaged
+          ? (
+              icon: Icons.warning_amber_rounded,
+              bg: AppColors.bannedBg,
+              fg: AppColors.bannedText,
+              pill: 'DAMAGED',
+            )
+          : (
+              icon: Icons.check,
+              bg: AppColors.compliantBg,
+              fg: AppColors.compliantText,
+              pill: 'NO DAMAGE',
+            );
+    }
+
+    switch (record.status) {
+      case ComplianceStatus.compliant:
+        return (
+          icon: Icons.check,
+          bg: AppColors.compliantBg,
+          fg: AppColors.compliantText,
+          pill: 'COMPLIANT',
+        );
+      case ComplianceStatus.nonCompliant:
+        return (
+          icon: Icons.warning_amber_rounded,
+          bg: AppColors.nonCompliantBg,
+          fg: AppColors.nonCompliantText,
+          pill: 'NON-COMPLIANT',
+        );
+      case ComplianceStatus.banned:
+        return (
+          icon: Icons.block,
+          bg: AppColors.bannedBg,
+          fg: AppColors.bannedText,
+          pill: 'WARNING / BANNED',
         );
     }
+  }
+
+  /// The at-a-glance fields for this record's kind of check.
+  ///
+  ///  • Label — product name, expiration date, all-labels-present yes/no.
+  ///  • Damage — what damage was found and on which sides.
+  List<Widget> _summaryLines(ScanRecord record) {
+    if (record.isLabelCheck) {
+      return [
+        _line('Product', record.productName),
+        _line('Expiration', record.expiration),
+        _line('All labels present', record.allLabelsPresent ? 'Yes' : 'No'),
+      ];
+    }
+
+    final damage = record.damageCheck;
+    if (!damage.available) {
+      return [_line('Damage', 'Could not be checked')];
+    }
+    if (!damage.isDamaged) {
+      return [_line('Damage', 'None detected')];
+    }
+    return [
+      _line('Damage', damage.damageTypes.join(', ')),
+      _line('Found on', damage.affectedSides),
+    ];
+  }
+
+  Widget _line(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Text(
+        '$label: $value',
+        style: const TextStyle(fontSize: 11.5, color: AppColors.muted),
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final record = ScanStore.load(dir);
-    final status = record?.statusLabel ?? '—';
-    final keyword = record?.matchedKeyword ?? '—';
-    final visuals = _statusVisuals(status);
+    final visuals = _visuals(record);
 
     return GestureDetector(
       onTap: onTap,
@@ -732,37 +878,46 @@ class _RecordCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         // Delete button
-                        GestureDetector(
-                          onTap: onDelete,
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: AppColors.bannedBg,
-                              borderRadius: BorderRadius.circular(6),
+                        Semantics(
+                          button: true,
+                          label: 'Delete record',
+                          child: GestureDetector(
+                            onTap: onDelete,
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: AppColors.bannedBg,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(Icons.close,
+                                  color: AppColors.bannedText, size: 14),
                             ),
-                            child: Icon(Icons.close,
-                                color: AppColors.bannedText, size: 14),
                           ),
                         ),
                         const SizedBox(width: 6),
                         // Multi-select checkbox
-                        GestureDetector(
-                          onTap: onSelect,
-                          child: Container(
-                            width: 20,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                  color: AppColors.border, width: 1.5),
-                              color: isSelected
-                                  ? AppColors.accentLight
-                                  : AppColors.surface,
+                        Semantics(
+                          button: true,
+                          checked: isSelected,
+                          label: 'Select record',
+                          child: GestureDetector(
+                            onTap: onSelect,
+                            child: Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: AppColors.border, width: 1.5),
+                                color: isSelected
+                                    ? AppColors.accentLight
+                                    : AppColors.surface,
+                              ),
+                              child: isSelected
+                                  ? const Icon(Icons.check,
+                                      size: 12, color: Colors.white)
+                                  : null,
                             ),
-                            child: isSelected
-                                ? const Icon(Icons.check,
-                                size: 12, color: Colors.white)
-                                : null,
                           ),
                         ),
                       ],
@@ -777,36 +932,39 @@ class _RecordCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
 
-                    // Compliance pill + detection basis
+                    // Which check this is, then its outcome.
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: visuals.pillBg,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            status,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              color: visuals.pillText,
-                              fontWeight: FontWeight.w700,
+                        if (record != null) ...[
+                          _TypeBadge(type: record.type),
+                          const SizedBox(width: 6),
+                        ],
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: visuals.bg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              visuals.pill,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: visuals.fg,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ),
                       ],
                     ),
-                    if (keyword != '—') ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        'Detection basis: $keyword',
-                        style: const TextStyle(
-                            fontSize: 11.5, color: AppColors.muted),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+
+                    // Only the fields that belong to this kind of report.
+                    if (record != null) ...[
+                      const SizedBox(height: 6),
+                      ..._summaryLines(record),
                     ],
                   ],
                 ),

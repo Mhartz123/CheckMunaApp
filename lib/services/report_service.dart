@@ -29,15 +29,18 @@ class ReportService {
   static const int _maxImageBytes = 200 * 1024;
   // ─────────────────────────────────────────────────────────────────────────
 
-  /// Submit a scan result. Only NON-COMPLIANT and WARNING/BANNED are sent.
-  /// Returns true on success, false on failure or if status is not flagged.
+  /// Submit a scan result. Only flagged records are sent — a non-compliant or
+  /// banned label check, or a damage check that found damage. Returns true on
+  /// success, false on failure or if the record is clean.
   static Future<bool> submit({
     required Directory recordDir,
     required ScanRecord record,
     required String productName,
   }) async {
-    // Only send flagged results
-    if (record.status == ComplianceStatus.compliant) return false;
+    final flagged = record.isDamageCheck
+        ? record.damageCheck.available && record.damageCheck.isDamaged
+        : record.status != ComplianceStatus.compliant;
+    if (!flagged) return false;
 
     // Skip if endpoint hasn't been configured yet
     if (_endpoint.contains('YOUR_PROJECT_NAME')) {
@@ -83,16 +86,34 @@ class ReportService {
       }
     }
 
+    // The dashboard reads scanType to route a submission to the right report:
+    // label checks carry the OCR/FDA fields, damage checks carry the detector
+    // findings. Both keep the shared envelope (id, name, status, reasons).
     return {
       'id': '${DateTime.now().millisecondsSinceEpoch}_${productName.hashCode.abs()}',
+      'scanType': record.type.id,
       'productName': productName,
       'status': record.statusLabel,
       'matchedKeyword': record.matchedKeyword,
       'reasons': record.reasons,
-      'expiration': record.expiration,
-      'ingredients': record.ingredients,
-      'extractedText': record.extractedText,
       'scannedAt': record.scannedAt.toIso8601String(),
+      if (record.isLabelCheck) ...{
+        'detectedProductName': record.productName,
+        'expiration': record.expiration,
+        'allLabelsPresent': record.allLabelsPresent,
+        'ingredients': record.ingredients,
+        'extractedText': record.extractedText,
+      },
+      if (record.isDamageCheck) ...{
+        'isDamaged': record.damageCheck.isDamaged,
+        'damageTypes': record.damageCheck.damageTypes,
+        'affectedSides': record.damageCheck.affectedSides,
+        'damageSpots': record.damageCheck.totalSpots,
+        'maxConfidence': record.damageCheck.maxConfidence,
+        'findings': [
+          for (final f in record.damageCheck.findings) f.toJson(),
+        ],
+      },
       if (imageBase64 != null) 'imageBase64': imageBase64,
     };
   }

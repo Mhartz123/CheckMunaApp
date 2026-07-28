@@ -37,7 +37,7 @@ class HomeScreen extends StatelessWidget {
                       ),
                       const SizedBox(width: 12),
                       const Text(
-                        'VerifyDA',
+                        'Label Check',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 24,
@@ -86,37 +86,44 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(height: 16),
                     _Step(
                       number: '1',
-                      icon: Icons.camera_alt_outlined,
-                      title: 'Take a photo',
+                      icon: Icons.touch_app_outlined,
+                      title: 'Pick a check',
                       description:
-                          'Point your camera at a food supplement label and tap the shutter button to capture it.',
+                          'The home screen has two buttons. Label Check reads the product label; Physical Damage Check inspects the box. They are separate inspections — run whichever you need.',
                     ),
                     _Step(
                       number: '2',
-                      icon: Icons.drive_file_rename_outline,
-                      title: 'Name your scan',
+                      icon: Icons.camera_alt_outlined,
+                      title: 'Take the photos',
                       description:
-                          'After taking the photo, give it a unique name so you can find it easily in your records later.',
+                          'A label check asks for three close-ups: product name, expiration date and ingredient list. A damage check asks for all four sides of the box.',
                     ),
                     _Step(
                       number: '3',
-                      icon: Icons.fact_check_outlined,
-                      title: 'Check compliance',
+                      icon: Icons.drive_file_rename_outline,
+                      title: 'Name your scan',
                       description:
-                          'Open a record and tap the compliance check. The app scans the label text and tells you if the product is Compliant, Non-Compliant, or Banned.',
+                          'After the photos, give the scan a unique name so you can find it easily in your records later.',
                     ),
                     _Step(
                       number: '4',
+                      icon: Icons.fact_check_outlined,
+                      title: 'Read the report',
+                      description:
+                          'A label report shows the product name, expiration date and whether all labels are present. A damage report shows whether damage was found and on which sides of the box.',
+                    ),
+                    _Step(
+                      number: '5',
                       icon: Icons.folder_outlined,
                       title: 'Manage your records',
                       description:
-                          'View, sort, rename, or delete your saved scans any time from the Records tab.',
+                          'View, sort, filter by check type, or delete your saved scans any time from the Records tab.',
                     ),
                     const SizedBox(height: 24),
 
                     // ── Compliance legend ──────────────────────────────────
                     const Text(
-                      'Compliance indicators',
+                      'Label check indicators',
                       style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.bold,
@@ -141,6 +148,30 @@ class HomeScreen extends StatelessWidget {
                       label: 'Banned / Warning',
                       description:
                           'Product is banned by the FDA. Dangerous to consume. Report immediately to the local FDA hotline.',
+                    ),
+                    const SizedBox(height: 24),
+
+                    // ── Damage legend ──────────────────────────────────────
+                    const Text(
+                      'Damage check indicators',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1A1A1A),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _ComplianceLegendItem(
+                      color: const Color(0xFF4CAF50),
+                      label: 'No damage',
+                      description:
+                          'No packaging damage was detected on any photographed side of the box.',
+                    ),
+                    _ComplianceLegendItem(
+                      color: const Color(0xFFC62828),
+                      label: 'Damaged',
+                      description:
+                          'Damage was detected. The report lists which sides are affected, how many spots, and the detector\'s confidence.',
                     ),
                     const SizedBox(height: 24),
 
