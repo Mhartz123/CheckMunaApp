@@ -61,7 +61,11 @@ class FloatingNavBar extends StatelessWidget {
             left: 0,
             right: 0,
             child: Center(
-              child: GestureDetector(
+              child: Semantics(
+                button: true,
+                selected: currentIndex == 1,
+                label: 'Scan',
+                child: GestureDetector(
                 onTap: () => onTap(1),
                 child: Container(
                   width: 58,
@@ -94,6 +98,7 @@ class FloatingNavBar extends StatelessWidget {
                   ),
                 ),
               ),
+              ),
             ),
           ),
           Positioned(
@@ -101,12 +106,16 @@ class FloatingNavBar extends StatelessWidget {
             left: 0,
             right: 0,
             child: Center(
-              child: Text(
-                'Scan',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: currentIndex == 1 ? FontWeight.w600 : FontWeight.w400,
-                  color: currentIndex == 1 ? AppColors.accentLight : inactiveColor,
+              child: ExcludeSemantics(
+                child: Text(
+                  'Scan',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight:
+                        currentIndex == 1 ? FontWeight.w600 : FontWeight.w400,
+                    color:
+                        currentIndex == 1 ? AppColors.accentLight : inactiveColor,
+                  ),
                 ),
               ),
             ),
@@ -138,10 +147,15 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final Color color = isActive ? AppColors.accentLight : inactiveColor;
     return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Column(
+      child: Semantics(
+        button: true,
+        selected: isActive,
+        label: label,
+        excludeSemantics: true,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(isActive ? activeIcon : icon, color: color, size: 20),
@@ -155,6 +169,7 @@ class _NavItem extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

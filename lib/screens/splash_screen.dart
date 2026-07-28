@@ -76,7 +76,7 @@ class _SplashScreenState extends State<SplashScreen>
 
                 // Title
                 const Text(
-                  'VerifyDA',
+                  'Label Check',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 32,
