@@ -3,10 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'screens/splash_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/camera_screen.dart';
-import 'screens/news_screen.dart';
+import 'screens/dashboard_screen.dart';
 import 'screens/records_screen.dart';
-import 'models/scan_record.dart';
 import 'widgets/floating_nav_bar.dart';
 import 'theme/app_colors.dart';
 
@@ -15,7 +13,8 @@ List<CameraDescription> globalCameras = [];
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Portrait by default across the app; the camera screen opts back into
-  // landscape so wide boxes can be captured tilted (see CameraScreen).
+  // landscape for its own lifetime so wide boxes can be captured tilted
+  // (see CameraScreen).
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   globalCameras = await availableCameras();
   runApp(const UIPrototypeApp());
@@ -27,7 +26,7 @@ class UIPrototypeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Label Check',
+      title: 'VerifyDA',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -97,40 +96,21 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  // 0 = News, 1 = Scan, 2 = Records
+  // 0 = Homepage, 1 = Records. The camera itself is no longer a permanently
+  // mounted tab — Homepage hosts the Check Label / Check Damage / Inspection
+  // Mode entry points, each of which pushes CameraScreen as its own route,
+  // so orientation handling for the camera now lives on CameraScreen instead
+  // of here.
   int _currentIndex = 0;
-
-  /// Which inspection the camera tab is set to run. Chosen from the two
-  /// buttons on the News/home tab; tapping the centre Scan button on its own
-  /// re-opens whichever check was last picked.
-  ScanType _scanMode = ScanType.label;
 
   final GlobalKey<RecordsScreenState> _recordsKey =
   GlobalKey<RecordsScreenState>();
-
-  /// Home-tab entry point: pick an inspection and jump to the camera.
-  void _startScan(ScanType mode) {
-    if (mode != _scanMode) setState(() => _scanMode = mode);
-    _switchTab(1);
-  }
 
   void _switchTab(int index) {
     if (index == _currentIndex) return;
     setState(() => _currentIndex = index);
 
-    // The camera tab (index 1) allows landscape so wide boxes can be captured
-    // tilted; every other tab stays portrait-locked.
-    SystemChrome.setPreferredOrientations(
-      index == 1
-          ? const [
-              DeviceOrientation.portraitUp,
-              DeviceOrientation.landscapeLeft,
-              DeviceOrientation.landscapeRight,
-            ]
-          : const [DeviceOrientation.portraitUp],
-    );
-
-    if (index == 2) {
+    if (index == 1) {
       // Reload records every time the Records tab is opened, with a
       // post-frame fallback in case the key isn't attached yet.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -142,18 +122,14 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      NewsScreen(
-        onStartScan: _startScan,
-        onRecordsTap: () => _switchTab(2),
-      ),
-      CameraScreen(mode: _scanMode),
+      const DashboardScreen(),
       RecordsScreen(key: _recordsKey),
     ];
 
     return Scaffold(
-      // All three tabs stay mounted at all times (so the camera controller
-      // and records state are never destroyed/rebuilt) — only their
-      // horizontal position is animated to create a sliding cross-fade.
+      // Both tabs stay mounted at all times (so Records state is never
+      // destroyed/rebuilt) — only their horizontal position is animated to
+      // create a sliding cross-fade.
       body: Stack(
         clipBehavior: Clip.hardEdge,
         children: List.generate(screens.length, (i) {
@@ -172,7 +148,6 @@ class _AppShellState extends State<AppShell> {
       bottomNavigationBar: FloatingNavBar(
         currentIndex: _currentIndex,
         onTap: _switchTab,
-        dark: _currentIndex == 1, // dark bar while camera is active
       ),
     );
   }

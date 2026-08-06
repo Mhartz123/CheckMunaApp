@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import '../main.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -10,11 +11,21 @@ import '../services/scan_store.dart';
 import '../services/report_service.dart';
 import 'result_screen.dart';
 
-/// UI-facing scan progress.
-///
-/// Label mode runs OCR in this screen before ComplianceEngine.analyzeLabel()
-/// is ever called, so text extraction gets its own leading stage ahead of
-/// [ScanStage]. Damage mode has a single stage — the detector pass.
+/// Which independent scan this camera session runs. Label checking and
+/// box/damage checking are separate flows; Inspection Mode runs both in one
+/// session (label slots, then box slots) and produces a single combined
+/// record. The user picks one on the Homepage before the camera opens.
+enum CameraMode { label, damage, inspection }
+
+/// Which slot group is currently being captured. Fixed for [CameraMode.label]
+/// (always [label]) and [CameraMode.damage] (always [box]); for
+/// [CameraMode.inspection] the session starts at [label] and advances to
+/// [box] once all label slots are captured.
+enum _CapturePhase { label, box }
+
+/// UI-facing scan progress. OCR happens in this screen before
+/// ComplianceEngine's analyze methods are ever called, so it gets its own
+/// leading stage ahead of [ScanStage].
 enum _ScanUiStage {
   extractingText,
   matchingRegistry,
@@ -30,42 +41,42 @@ typedef _BoxSpec = ({BoxSlot slot, String title, String helper});
 
 const List<_LabelSpec> _labelSlots = [
   (
-    slot: PhotoSlot.front,
-    title: 'Product name / label',
-    helper: 'Frame the product name or full label inside the guide',
+  slot: PhotoSlot.front,
+  title: 'Product name / label',
+  helper: 'Frame the product name or full label inside the guide',
   ),
   (
-    slot: PhotoSlot.expiration,
-    title: 'Expiration date',
-    helper: 'Frame the expiration / best-before date inside the guide',
+  slot: PhotoSlot.expiration,
+  title: 'Expiration date',
+  helper: 'Frame the expiration / best-before date inside the guide',
   ),
   (
-    slot: PhotoSlot.ingredients,
-    title: 'Ingredient list',
-    helper: 'Frame the ingredient list inside the guide',
+  slot: PhotoSlot.ingredients,
+  title: 'Ingredient list',
+  helper: 'Frame the ingredient list inside the guide',
   ),
 ];
 
 const List<_BoxSpec> _boxSlots = [
   (
-    slot: BoxSlot.front,
-    title: 'Box — Front',
-    helper: 'Fit the whole front of the box inside the guide',
+  slot: BoxSlot.front,
+  title: 'Box — Front',
+  helper: 'Fit the whole front of the box inside the guide',
   ),
   (
-    slot: BoxSlot.side1,
-    title: 'Box — Side',
-    helper: 'Fit one side of the box inside the guide',
+  slot: BoxSlot.side1,
+  title: 'Box — Side',
+  helper: 'Fit one side of the box inside the guide',
   ),
   (
-    slot: BoxSlot.side2,
-    title: 'Box — Other side',
-    helper: 'Fit the other side of the box inside the guide',
+  slot: BoxSlot.side2,
+  title: 'Box — Other side',
+  helper: 'Fit the other side of the box inside the guide',
   ),
   (
-    slot: BoxSlot.back,
-    title: 'Box — Back',
-    helper: 'Fit the whole back of the box inside the guide',
+  slot: BoxSlot.back,
+  title: 'Box — Back',
+  helper: 'Fit the whole back of the box inside the guide',
   ),
 ];
 
@@ -75,27 +86,17 @@ const List<_BoxSpec> _boxSlots = [
 typedef _GuidePreset = ({String label, Size size});
 
 const List<_GuidePreset> _guidePresets = [
-  (label: 'Small', size: Size(120, 80)),
-  (label: 'Medium', size: Size(200, 140)),
-  (label: 'Large', size: Size(290, 210)),
+  (label: 'Small', size: Size(190, 130)),
+  (label: 'Medium', size: Size(250, 180)),
+  (label: 'Large', size: Size(310, 230)),
 ];
 
 /// The expiration date is small and must not capture nearby text, so its
 /// framing box is fixed tight regardless of the selected preset.
 const Size _expirationGuideSize = Size(210, 100);
 
-/// The capture screen for both inspections. [mode] decides which one runs:
-///
-///  • [ScanType.label]  — 3 close-ups (product / expiration / ingredients),
-///    each cropped to the framing guide, then OCR'd for the FDA / expiry /
-///    ingredient checks. No box photos, no damage detection.
-///  • [ScanType.damage] — 4 full-frame box shots (front / side / side / back)
-///    fed to the on-device YOLO11n detector. No crop, no OCR, no FDA lookup.
-///
-/// Switching [mode] while photos are part-captured discards them and restarts
-/// at the first slot — the two flows never share captures.
 class CameraScreen extends StatefulWidget {
-  final ScanType mode;
+  final CameraMode mode;
 
   const CameraScreen({super.key, required this.mode});
 
@@ -123,6 +124,7 @@ class _CameraScreenState extends State<CameraScreen>
   Offset? _focusPoint;
 
   // ── Sequential capture state ────────────────────────────────────────────
+  late _CapturePhase _phase;
   int _slotIndex = 0;
 
   /// Index into [_guidePresets] for the label framing box. Defaults to Medium.
@@ -133,7 +135,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// Label slots the user has verified are physically absent from the packaging
   /// (via the "not on the box" button). A declared-missing element flags the
-  /// scan non-compliant — see [ComplianceEngine.analyzeLabel].
+  /// scan non-compliant — see ComplianceEngine's label checks.
   final Set<PhotoSlot> _declaredMissing = {};
 
   /// Rendered size of the camera area, captured in [build] via LayoutBuilder.
@@ -141,28 +143,73 @@ class _CameraScreenState extends State<CameraScreen>
   /// system used to crop label photos to the guide.
   Size _previewSize = Size.zero;
 
-  bool get _isLabelMode => widget.mode == ScanType.label;
+  bool get _isLabelPhase => _phase == _CapturePhase.label;
 
   int get _slotCount =>
-      _isLabelMode ? _labelSlots.length : _boxSlots.length;
+      _isLabelPhase ? _labelSlots.length : _boxSlots.length;
 
-  String get _currentTitle => _isLabelMode
-      ? _labelSlots[_slotIndex].title
-      : _boxSlots[_slotIndex].title;
+  String get _currentTitle =>
+      _isLabelPhase ? _labelSlots[_slotIndex].title : _boxSlots[_slotIndex].title;
 
-  String get _currentHelper => _isLabelMode
+  String get _currentHelper => _isLabelPhase
       ? _labelSlots[_slotIndex].helper
       : _boxSlots[_slotIndex].helper;
 
-  /// The label slot currently being captured, or null in damage mode.
+  /// The label slot currently being captured, or null during a box phase.
   PhotoSlot? get _currentLabelSlot =>
-      _isLabelMode ? _labelSlots[_slotIndex].slot : null;
+      _isLabelPhase ? _labelSlots[_slotIndex].slot : null;
 
   /// Whether the current slot is one the user can declare absent from the
   /// packaging (expiration date or ingredient list).
   bool get _canDeclareMissing =>
       _currentLabelSlot == PhotoSlot.expiration ||
-      _currentLabelSlot == PhotoSlot.ingredients;
+          _currentLabelSlot == PhotoSlot.ingredients;
+
+  /// Which progress stages apply to the whole session, in display order.
+  List<_ScanUiStage> get _activeStages {
+    switch (widget.mode) {
+      case CameraMode.label:
+        return const [
+          _ScanUiStage.extractingText,
+          _ScanUiStage.matchingRegistry,
+          _ScanUiStage.classifying,
+        ];
+      case CameraMode.damage:
+        return const [_ScanUiStage.checkingDamage];
+      case CameraMode.inspection:
+        return const [
+          _ScanUiStage.extractingText,
+          _ScanUiStage.matchingRegistry,
+          _ScanUiStage.classifying,
+          _ScanUiStage.checkingDamage,
+        ];
+    }
+  }
+
+  /// Badge text describing what this camera session is doing right now.
+  String get _modeBadgeText {
+    switch (widget.mode) {
+      case CameraMode.label:
+        return 'LABEL CHECK';
+      case CameraMode.damage:
+        return 'BOX / DAMAGE CHECK';
+      case CameraMode.inspection:
+        return _isLabelPhase
+            ? 'INSPECTION · LABEL STEP'
+            : 'INSPECTION · BOX STEP';
+    }
+  }
+
+  Color get _modeBadgeColor {
+    switch (widget.mode) {
+      case CameraMode.label:
+        return const Color(0xFF4CAF50);
+      case CameraMode.damage:
+        return const Color(0xFF1E88E5);
+      case CameraMode.inspection:
+        return const Color(0xFF8E24AA);
+    }
+  }
 
   /// Framing-guide dimensions. Box shots use a fixed upright rectangle. Label
   /// close-ups use the user-selected [_guidePresets] entry so oversized/long
@@ -170,7 +217,7 @@ class _CameraScreenState extends State<CameraScreen>
   /// is locked to a small tight frame ([_expirationGuideSize]) so nearby text
   /// can't be mistaken for the date.
   Size get _guideSize {
-    if (!_isLabelMode) return const Size(300, 360);
+    if (!_isLabelPhase) return const Size(300, 360);
     if (_currentLabelSlot == PhotoSlot.expiration) return _expirationGuideSize;
     return _guidePresets[_guidePresetIndex].size;
   }
@@ -179,23 +226,23 @@ class _CameraScreenState extends State<CameraScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Inspection Mode starts on the label phase, same as label-only mode;
+    // damage-only mode starts (and stays) on the box phase.
+    _phase = widget.mode == CameraMode.damage
+        ? _CapturePhase.box
+        : _CapturePhase.label;
     _initCamera(_cameraIndex);
-    // Prefetch this mode's models/datasets while the user is still framing
-    // photos, so analysis doesn't pay full load latency.
-    ComplianceEngine.warmUp(widget.mode);
-  }
-
-  @override
-  void didUpdateWidget(CameraScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.mode == widget.mode) return;
-    // Mode switched under us (the user picked the other check from Home).
-    // Throw away any part-captured photos and restart — the camera controller
-    // itself is left alone so switching modes doesn't restart the preview.
-    // No setState: this runs during a rebuild that will pick the change up.
-    _deleteCapturedFiles();
-    _clearCaptureState();
-    ComplianceEngine.warmUp(widget.mode);
+    // Prefetch the FDA dataset (and DistilBERT if enabled) while the user is
+    // still framing/capturing photos, so analysis doesn't pay full load
+    // latency.
+    ComplianceEngine.warmUp();
+    // Wide boxes are easier to capture tilted, so allow landscape only while
+    // this screen is open; every other screen stays portrait-locked.
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
   }
 
   Future<void> _initCamera(int index) async {
@@ -235,8 +282,16 @@ class _CameraScreenState extends State<CameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
+    // Restore the portrait lock used by the rest of the app.
+    SystemChrome.setPreferredOrientations(
+        const [DeviceOrientation.portraitUp]);
     // Best-effort cleanup of any temp photos abandoned mid-flow.
-    _deleteCapturedFiles();
+    for (final path in [..._labelPaths.values, ..._boxPaths.values]) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
     super.dispose();
   }
 
@@ -298,7 +353,7 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final XFile photo = await _controller!.takePicture();
 
-      if (_isLabelMode) {
+      if (_isLabelPhase) {
         // Isolate the label region: crop to the framing guide so OCR isn't
         // distracted by the surrounding scene.
         final guide = Rect.fromCenter(
@@ -360,41 +415,48 @@ class _CameraScreenState extends State<CameraScreen>
       setState(() => _slotIndex++);
       return;
     }
-    // Last slot of this mode's single capture phase — run its analysis.
-    if (_isLabelMode) {
-      await _runLabelAnalysis();
-    } else {
-      await _runDamageAnalysis();
+
+    // Inspection Mode: after the last label slot, move on to the box phase
+    // instead of analyzing yet.
+    if (widget.mode == CameraMode.inspection && _isLabelPhase) {
+      setState(() {
+        _phase = _CapturePhase.box;
+        _slotIndex = 0;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Label photos done — now photograph the box.'),
+            backgroundColor: Color(0xFF4CAF50),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+
+    await _runAnalysis();
+  }
+
+  // ── Run the analysis for whichever mode this screen is in ──────────────
+  Future<void> _runAnalysis() async {
+    switch (widget.mode) {
+      case CameraMode.label:
+        await _runLabelAnalysis();
+        break;
+      case CameraMode.damage:
+        await _runDamageAnalysis();
+        break;
+      case CameraMode.inspection:
+        await _runInspectionAnalysis();
+        break;
     }
   }
 
-  /// Damage mode: the box shots go straight to the detector — no crop, no OCR,
-  /// no FDA lookup.
-  Future<void> _runDamageAnalysis() async {
-    setState(() {
-      _isProcessing = true;
-      _scanStage = _ScanUiStage.checkingDamage;
-    });
-
-    final record = await ComplianceEngine.analyzeDamage(
-      boxPhotoPaths: Map.of(_boxPaths),
-    );
-
-    if (!mounted) return;
-    setState(() => _isProcessing = false);
-    await _showResultThenSave(record);
-  }
-
-  // ── Label mode: OCR the label crops, then run the compliance pipeline ──
-  Future<void> _runLabelAnalysis() async {
-    setState(() {
-      _isProcessing = true;
-      _scanStage = _ScanUiStage.extractingText;
-    });
-
-    // OCR each label crop separately so its text routes straight to that
-    // slot's field (see LabelParser) instead of guessing field boundaries out
-    // of one combined blob.
+  /// OCRs every captured label crop, routing each slot's text to its own
+  /// field (see LabelParser) instead of guessing field boundaries out of one
+  /// combined blob. Shared by label-only and Inspection Mode.
+  Future<_OcrResult> _ocrLabelSlots() async {
     final textRecognizer = TextRecognizer();
     final textBySlot = <PhotoSlot, String>{};
     final buffer = StringBuffer();
@@ -419,39 +481,101 @@ class _CameraScreenState extends State<CameraScreen>
     } finally {
       await textRecognizer.close();
     }
-
-    final combinedText = buffer.toString();
-
-    final record = await ComplianceEngine.analyzeLabel(
+    return _OcrResult(
       textBySlot: textBySlot,
-      combinedText: combinedText,
-      ocrConfidence: nameConfidence,
-      expirationDeclaredMissing:
-          _declaredMissing.contains(PhotoSlot.expiration),
-      ingredientsDeclaredMissing:
-          _declaredMissing.contains(PhotoSlot.ingredients),
-      onStageChange: (stage) {
-        if (!mounted) return;
-        setState(() {
-          _scanStage = switch (stage) {
-            ScanStage.matchingRegistry => _ScanUiStage.matchingRegistry,
-            ScanStage.classifying => _ScanUiStage.classifying,
-          };
-        });
-      },
+      combinedText: buffer.toString(),
+      nameConfidence: nameConfidence,
     );
-
-    if (!mounted) return;
-    setState(() => _isProcessing = false);
-    await _showResultThenSave(record);
   }
 
-  /// Shows the result screen, then prompts for a record name to save under.
-  Future<void> _showResultThenSave(ScanRecord record) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ResultScreen(record: record)),
+  List<String> get _capturedBoxPaths => [
+    for (final spec in _boxSlots)
+      if (_boxPaths[spec.slot] != null) _boxPaths[spec.slot]!,
+  ];
+
+  // ── OCR the label crops, then run the label-compliance analysis ────────
+  Future<void> _runLabelAnalysis() async {
+    setState(() {
+      _isProcessing = true;
+      _scanStage = _ScanUiStage.extractingText;
+    });
+
+    final ocr = await _ocrLabelSlots();
+
+    final record = await ComplianceEngine.analyzeLabel(
+      textBySlot: ocr.textBySlot,
+      combinedText: ocr.combinedText,
+      ocrConfidence: ocr.nameConfidence,
+      expirationDeclaredMissing:
+      _declaredMissing.contains(PhotoSlot.expiration),
+      ingredientsDeclaredMissing:
+      _declaredMissing.contains(PhotoSlot.ingredients),
+      onStageChange: _mapStageChange,
     );
-    if (mounted) _showSaveSheet(record);
+
+    await _finishAnalysis(record);
+  }
+
+  // ── Run the box/damage analysis directly — no OCR involved ─────────────
+  Future<void> _runDamageAnalysis() async {
+    setState(() {
+      _isProcessing = true;
+      _scanStage = _ScanUiStage.checkingDamage;
+    });
+
+    final record = await ComplianceEngine.analyzeDamage(
+      boxPhotoPaths: _capturedBoxPaths,
+    );
+
+    await _finishAnalysis(record);
+  }
+
+  // ── OCR + damage check together, combined into one verdict ─────────────
+  Future<void> _runInspectionAnalysis() async {
+    setState(() {
+      _isProcessing = true;
+      _scanStage = _ScanUiStage.extractingText;
+    });
+
+    final ocr = await _ocrLabelSlots();
+
+    final record = await ComplianceEngine.analyzeInspection(
+      textBySlot: ocr.textBySlot,
+      combinedText: ocr.combinedText,
+      boxPhotoPaths: _capturedBoxPaths,
+      ocrConfidence: ocr.nameConfidence,
+      expirationDeclaredMissing:
+      _declaredMissing.contains(PhotoSlot.expiration),
+      ingredientsDeclaredMissing:
+      _declaredMissing.contains(PhotoSlot.ingredients),
+      onStageChange: _mapStageChange,
+    );
+
+    await _finishAnalysis(record);
+  }
+
+  void _mapStageChange(ScanStage stage) {
+    if (!mounted) return;
+    setState(() {
+      _scanStage = switch (stage) {
+        ScanStage.matchingRegistry => _ScanUiStage.matchingRegistry,
+        ScanStage.classifying => _ScanUiStage.classifying,
+        ScanStage.checkingDamage => _ScanUiStage.checkingDamage,
+      };
+    });
+  }
+
+  Future<void> _finishAnalysis(ScanRecord record) async {
+    if (mounted) setState(() => _isProcessing = false);
+
+    if (mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ResultScreen(record: record),
+        ),
+      );
+      if (mounted) _showSaveSheet(record);
+    }
   }
 
   /// Mean recognized-line confidence (0..1) across [recognized], or null if
@@ -475,37 +599,28 @@ class _CameraScreenState extends State<CameraScreen>
   // ── Check duplicate name ───────────────────────────────────────────────────
   Future<bool> _nameExists(String raw) => ScanStore.recordExists(raw);
 
-  /// Clears capture state without a setState — safe to call from
-  /// [didUpdateWidget], where a rebuild is already in flight.
-  void _clearCaptureState() {
-    _labelPaths.clear();
-    _boxPaths.clear();
-    _declaredMissing.clear();
-    _slotIndex = 0;
-  }
-
-  /// Deletes every temp photo captured so far. Returns without touching state
-  /// so callers decide whether a rebuild is needed.
-  void _deleteCapturedFiles() {
-    for (final path in [..._labelPaths.values, ..._boxPaths.values]) {
-      try {
-        final f = File(path);
-        if (f.existsSync()) f.deleteSync();
-      } catch (_) {}
-    }
-  }
-
   void _resetCaptureFlow() {
-    setState(_clearCaptureState);
+    setState(() {
+      _labelPaths.clear();
+      _boxPaths.clear();
+      _declaredMissing.clear();
+      _slotIndex = 0;
+      _phase = widget.mode == CameraMode.damage
+          ? _CapturePhase.box
+          : _CapturePhase.label;
+    });
   }
 
   void _discardCapturedPhotos() {
-    _deleteCapturedFiles();
+    for (final path in [..._labelPaths.values, ..._boxPaths.values]) {
+      final f = File(path);
+      if (f.existsSync()) f.deleteSync();
+    }
     _resetCaptureFlow();
   }
 
   /// Confirms before wiping every captured photo and restarting the flow from
-  /// the first label slot.
+  /// the first slot.
   Future<void> _confirmClearAll() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -513,7 +628,7 @@ class _CameraScreenState extends State<CameraScreen>
         title: const Text('Clear all photos?'),
         content: const Text(
             'This discards every photo you\'ve taken and restarts the scan '
-            'from the first step.'),
+                'from the first step.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -541,9 +656,47 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Confirms before leaving this scan and popping back to the chooser.
+  /// Skips the confirmation if nothing has been captured yet.
+  Future<void> _confirmExit() async {
+    if (_isTaking || _isProcessing) return;
+    final hasPhotos = _labelPaths.isNotEmpty || _boxPaths.isNotEmpty;
+    if (!hasPhotos) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Exit scan?'),
+        content: const Text(
+            'This discards every photo you\'ve taken so far for this scan.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFE57373)),
+            child: const Text('Exit'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      _discardCapturedPhotos();
+      if (mounted) Navigator.of(context).pop();
+    }
+  }
+
   // ── Save Record bottom sheet ───────────────────────────────────────────────
   void _showSaveSheet(ScanRecord record) {
     final TextEditingController nameController = TextEditingController();
+    // The outer screen's own context, kept so we can pop CameraScreen itself
+    // (back to the Homepage) once the sheet — which sits on its own route —
+    // has been dismissed.
+    final BuildContext cameraContext = context;
 
     showModalBottomSheet(
       context: context,
@@ -666,6 +819,9 @@ class _CameraScreenState extends State<CameraScreen>
                           onPressed: () {
                             Navigator.of(context).pop();
                             _discardCapturedPhotos();
+                            if (cameraContext.mounted) {
+                              Navigator.of(cameraContext).pop();
+                            }
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFE57373),
@@ -689,7 +845,10 @@ class _CameraScreenState extends State<CameraScreen>
                               : () async {
                             final raw = nameController.text.trim();
                             Navigator.of(context).pop();
-                            await _saveRecord(raw, record);
+                            final saved = await _saveRecord(raw, record);
+                            if (saved && cameraContext.mounted) {
+                              Navigator.of(cameraContext).pop();
+                            }
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF4CAF50),
@@ -718,13 +877,14 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   // ── Save record ─────────────────────────────────────────────────────────────
-  Future<void> _saveRecord(String rawName, ScanRecord record) async {
+  /// Returns true if the record was saved successfully.
+  Future<bool> _saveRecord(String rawName, ScanRecord record) async {
     try {
       final dir = await ScanStore.save(
         rawName: rawName,
-        record: record,
-        labelPhotoPaths: Map.of(_labelPaths),
+        capturedPhotoPaths: Map.of(_labelPaths),
         boxPhotoPaths: Map.of(_boxPaths),
+        record: record,
       );
 
       // Submit flagged results to central dashboard (fire-and-forget)
@@ -743,6 +903,7 @@ class _CameraScreenState extends State<CameraScreen>
         );
       }
       _resetCaptureFlow();
+      return true;
     } catch (e) {
       debugPrint('Save record error: $e');
       if (mounted) {
@@ -753,6 +914,7 @@ class _CameraScreenState extends State<CameraScreen>
           ),
         );
       }
+      return false;
     }
   }
 
@@ -776,7 +938,7 @@ class _CameraScreenState extends State<CameraScreen>
       );
     }
 
-    final isLabelPhase = _isLabelMode;
+    final isLabelPhase = _isLabelPhase;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -814,18 +976,18 @@ class _CameraScreenState extends State<CameraScreen>
                     ),
                     child: _currentZoom > _minZoom + 0.05
                         ? Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.5),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              '${_currentZoom.toStringAsFixed(1)}x',
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 14),
-                            ),
-                          )
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${_currentZoom.toStringAsFixed(1)}x',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 14),
+                      ),
+                    )
                         : null,
                   ),
                 ),
@@ -849,20 +1011,16 @@ class _CameraScreenState extends State<CameraScreen>
                 right: 20,
                 child: Column(
                   children: [
-                    // Which of the two inspections is running.
+                    // Which check this session is running.
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isLabelPhase
-                            ? const Color(0xFF4CAF50)
-                            : const Color(0xFF1E88E5),
+                        color: _modeBadgeColor,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        isLabelPhase
-                            ? 'LABEL CHECK'
-                            : 'PHYSICAL DAMAGE CHECK',
+                        _modeBadgeText,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 11,
@@ -903,10 +1061,7 @@ class _CameraScreenState extends State<CameraScreen>
                     // element is absent, which flags the scan non-compliant.
                     if (isLabelPhase && !_isProcessing && _canDeclareMissing) ...[
                       const SizedBox(height: 12),
-                      Semantics(
-                        button: true,
-                        enabled: !_isTaking,
-                        child: GestureDetector(
+                      GestureDetector(
                         onTap: _isTaking ? null : _declareCurrentMissing,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
@@ -938,7 +1093,6 @@ class _CameraScreenState extends State<CameraScreen>
                           ),
                         ),
                       ),
-                      ),
                     ],
                   ],
                 ),
@@ -951,11 +1105,7 @@ class _CameraScreenState extends State<CameraScreen>
                 Positioned(
                   top: 52,
                   left: 12,
-                  child: Semantics(
-                    button: true,
-                    enabled: !_isTaking,
-                    label: 'Clear all photos',
-                    child: GestureDetector(
+                  child: GestureDetector(
                     onTap: _isTaking ? null : _confirmClearAll,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -979,6 +1129,24 @@ class _CameraScreenState extends State<CameraScreen>
                       ),
                     ),
                   ),
+                ),
+
+              // Exit shortcut — top-right. Pops back to the Homepage.
+              if (!_isProcessing)
+                Positioned(
+                  top: 52,
+                  right: 12,
+                  child: GestureDetector(
+                    onTap: _isTaking ? null : _confirmExit,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close,
+                          color: Colors.white, size: 18),
+                    ),
                   ),
                 ),
 
@@ -988,7 +1156,7 @@ class _CameraScreenState extends State<CameraScreen>
                   child: Center(
                     child: _ScanProgressCard(
                       stage: _scanStage,
-                      mode: widget.mode,
+                      stages: _activeStages,
                     ),
                   ),
                 ),
@@ -1013,21 +1181,21 @@ class _CameraScreenState extends State<CameraScreen>
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: isLabelPhase
                       ? [
-                          for (var i = 0; i < _labelSlots.length; i++)
-                            _SlotThumbnail(
-                              label: _shortTitle(_labelSlots[i].title),
-                              isCurrent: i == _slotIndex,
-                              imagePath: _labelPaths[_labelSlots[i].slot],
-                            ),
-                        ]
+                    for (var i = 0; i < _labelSlots.length; i++)
+                      _SlotThumbnail(
+                        label: _shortTitle(_labelSlots[i].title),
+                        isCurrent: i == _slotIndex,
+                        imagePath: _labelPaths[_labelSlots[i].slot],
+                      ),
+                  ]
                       : [
-                          for (var i = 0; i < _boxSlots.length; i++)
-                            _SlotThumbnail(
-                              label: _shortTitle(_boxSlots[i].title),
-                              isCurrent: i == _slotIndex,
-                              imagePath: _boxPaths[_boxSlots[i].slot],
-                            ),
-                        ],
+                    for (var i = 0; i < _boxSlots.length; i++)
+                      _SlotThumbnail(
+                        label: _shortTitle(_boxSlots[i].title),
+                        isCurrent: i == _slotIndex,
+                        imagePath: _boxPaths[_boxSlots[i].slot],
+                      ),
+                  ],
                 ),
               ),
 
@@ -1044,7 +1212,6 @@ class _CameraScreenState extends State<CameraScreen>
                       icon: Icons.flip_camera_android,
                       iconColor: Colors.white,
                       size: 52,
-                      semanticLabel: 'Switch camera',
                       onTap: _isProcessing ? null : _switchCamera,
                     ),
                     _CircleButton(
@@ -1052,7 +1219,6 @@ class _CameraScreenState extends State<CameraScreen>
                       icon: _isTaking ? null : Icons.circle,
                       iconColor: Colors.white,
                       size: 72,
-                      semanticLabel: _isTaking ? 'Capturing photo' : 'Capture photo',
                       onTap: (_isTaking || _isProcessing) ? null : _takePhoto,
                       isShutter: true,
                       isTaking: _isTaking,
@@ -1062,8 +1228,6 @@ class _CameraScreenState extends State<CameraScreen>
                       icon: _isFlashOn ? Icons.flash_on : Icons.flash_off,
                       iconColor: Colors.white,
                       size: 52,
-                      semanticLabel:
-                          _isFlashOn ? 'Turn flash off' : 'Turn flash on',
                       onTap: _isProcessing ? null : _toggleFlash,
                     ),
                   ],
@@ -1076,7 +1240,7 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// The framing-box control shown during the label phase: a preset picker for
+  /// The framing-box control shown during a label phase: a preset picker for
   /// most slots, or a locked "fixed tight frame" badge for the expiration slot.
   Widget _buildGuideControl() {
     if (_currentLabelSlot == PhotoSlot.expiration) {
@@ -1115,11 +1279,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   Widget _presetPill(int index) {
     final selected = index == _guidePresetIndex;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '${_guidePresets[index].label} framing box',
-      child: GestureDetector(
+    return GestureDetector(
       onTap: _isTaking ? null : () => setState(() => _guidePresetIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
@@ -1137,7 +1297,6 @@ class _CameraScreenState extends State<CameraScreen>
           ),
         ),
       ),
-      ),
     );
   }
 
@@ -1146,6 +1305,20 @@ class _CameraScreenState extends State<CameraScreen>
     final cleaned = title.replaceFirst('Box — ', '');
     return cleaned.split(' ').first;
   }
+}
+
+/// Bundles the per-slot OCR text, the concatenated text used for registry
+/// matching, and the product-name crop's mean confidence.
+class _OcrResult {
+  final Map<PhotoSlot, String> textBySlot;
+  final String combinedText;
+  final double? nameConfidence;
+
+  const _OcrResult({
+    required this.textBySlot,
+    required this.combinedText,
+    required this.nameConfidence,
+  });
 }
 
 // ── Slot thumbnail ─────────────────────────────────────────────────────────────
@@ -1183,14 +1356,14 @@ class _SlotThumbnail extends StatelessWidget {
                 ),
                 image: imagePath != null
                     ? DecorationImage(
-                        image: FileImage(File(imagePath!)),
-                        fit: BoxFit.cover,
-                      )
+                  image: FileImage(File(imagePath!)),
+                  fit: BoxFit.cover,
+                )
                     : null,
               ),
               child: imagePath == null
                   ? Icon(Icons.image_outlined,
-                      color: Colors.white.withValues(alpha: 0.5), size: 20)
+                  color: Colors.white.withValues(alpha: 0.5), size: 20)
                   : null,
             ),
             if (isCaptured)
@@ -1227,7 +1400,6 @@ class _CircleButton extends StatelessWidget {
   final Color iconColor;
   final double size;
   final VoidCallback? onTap;
-  final String semanticLabel;
   final bool isShutter;
   final bool isTaking;
 
@@ -1237,37 +1409,31 @@ class _CircleButton extends StatelessWidget {
     required this.iconColor,
     required this.size,
     required this.onTap,
-    required this.semanticLabel,
     this.isShutter = false,
     this.isTaking = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      enabled: onTap != null,
-      label: semanticLabel,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: color,
-            border: isShutter
-                ? Border.all(color: Colors.white, width: 4)
-                : null,
-          ),
-          child: isTaking
-              ? const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.black),
-                )
-              : Icon(icon, color: iconColor, size: size * 0.45),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color,
+          border: isShutter
+              ? Border.all(color: Colors.white, width: 4)
+              : null,
         ),
+        child: isTaking
+            ? const Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Colors.black),
+        )
+            : Icon(icon, color: iconColor, size: size * 0.45),
       ),
     );
   }
@@ -1361,15 +1527,19 @@ class _FocusCircleState extends State<_FocusCircle>
 
 class _ScanProgressCard extends StatelessWidget {
   final _ScanUiStage stage;
-  final ScanType mode;
 
-  const _ScanProgressCard({required this.stage, required this.mode});
+  /// Which stages apply to the running mode, in display order — label mode
+  /// shows OCR/registry/classify; damage mode shows just the damage check;
+  /// Inspection Mode shows all four.
+  final List<_ScanUiStage> stages;
+
+  const _ScanProgressCard({required this.stage, required this.stages});
 
   static const _subtitles = {
     _ScanUiStage.extractingText: 'Reading text from your label photos',
     _ScanUiStage.matchingRegistry: 'Checking against the FDA database',
     _ScanUiStage.classifying: 'Running the compliance model',
-    _ScanUiStage.checkingDamage: 'Inspecting every side of the box',
+    _ScanUiStage.checkingDamage: 'Inspecting the box for damage',
   };
 
   static const _stepLabels = {
@@ -1379,18 +1549,8 @@ class _ScanProgressCard extends StatelessWidget {
     _ScanUiStage.checkingDamage: 'Checking box for damage',
   };
 
-  /// Only the stages this mode actually runs — a damage scan shouldn't show
-  /// three greyed-out OCR steps it will never reach.
-  static const _labelStages = [
-    _ScanUiStage.extractingText,
-    _ScanUiStage.matchingRegistry,
-    _ScanUiStage.classifying,
-  ];
-  static const _damageStages = [_ScanUiStage.checkingDamage];
-
   @override
   Widget build(BuildContext context) {
-    final stages = mode == ScanType.label ? _labelStages : _damageStages;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 36),
       child: Column(
@@ -1412,11 +1572,9 @@ class _ScanProgressCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
-          Text(
-            mode == ScanType.label
-                ? 'Checking label...'
-                : 'Checking for damage...',
-            style: const TextStyle(
+          const Text(
+            'Analyzing scan...',
+            style: TextStyle(
               color: Colors.white,
               fontSize: 20,
               fontWeight: FontWeight.bold,

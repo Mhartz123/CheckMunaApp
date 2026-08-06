@@ -25,6 +25,11 @@ class AppColors {
   static const Color bannedBg = Color(0xFFFFEBEE);
   static const Color bannedText = Color(0xFFB71C1C);
 
+  // Scan-kind accents (Check Label / Check Damage / Inspection Mode)
+  static const Color labelKind = accentLight;
+  static const Color damageKind = Color(0xFF1E88E5);
+  static const Color inspection = Color(0xFF8E24AA);
+
   // Camera screen (stays dark regardless of theme)
   static const Color cameraBg = Color(0xFF111111);
 }

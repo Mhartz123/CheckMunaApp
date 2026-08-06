@@ -1,5 +1,5 @@
 name: ui_prototype
-description: Label Check app.
+description: UI Prototype app.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -34,5 +34,5 @@ flutter:
     - assets/model_qint8_arm64.onnx
     - assets/fda_index_embeddings_fp16.npy
     - assets/fda_index_names.txt
-    # On-device YOLO11n packaging-damage detector (replaces the Roboflow API).
-    - assets/damage_yolo11n.onnx
+    # On-device YOLOv8n packaging-damage detector (replaces the Roboflow API).
+    - assets/damage_yolov8n.onnx

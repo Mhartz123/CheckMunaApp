@@ -10,19 +10,12 @@ import '../models/scan_record.dart';
 
 class _SingleImageResult {
   final bool isDamaged;
-
-  /// Class name of each surviving detection.
   final List<String> detections;
-
-  /// Confidence of each surviving detection, index-aligned with [detections].
-  final List<double> scores;
-
   final double maxConfidence;
 
   const _SingleImageResult({
     required this.isDamaged,
     required this.detections,
-    required this.scores,
     required this.maxConfidence,
   });
 }
@@ -37,35 +30,27 @@ class _Det {
   const _Det(this.x1, this.y1, this.x2, this.y2, this.score, this.cls);
 }
 
-/// Packaging-damage check backed by an **on-device** YOLO11n model
-/// (`assets/damage_yolo11n.onnx`), run through the `onnxruntime` engine already
+/// Packaging-damage check backed by an **on-device** YOLOv8n model
+/// (`assets/damage_yolov8n.onnx`), run through the `onnxruntime` engine already
 /// bundled for the semantic matcher. No network, no API key, no per-scan cost —
 /// scans work fully offline.
 ///
 /// Pipeline per box photo: decode → letterbox to 640 → CHW float32 (÷255) →
 /// model → decode the [1, 4+nc, 8400] output → confidence filter → class-aware
-/// NMS. Any surviving detection counts as damage, and each box side that comes
-/// back dirty becomes one [DamageFinding] so the report can say *where* the
-/// damage is and how bad the model thinks it is.
-///
-/// The shipped model is single-class, so it cannot say what *kind* of damage
-/// it found — see [_classNames].
+/// NMS. Any surviving detection counts as damage; raw class names are preserved
+/// so downstream checks like [DamageCheckResult.hasScratch] keep working.
 ///
 /// Failures (bad decode, model load error) are reported through
 /// [DamageCheckResult.available] rather than thrown, so a scan still completes
 /// with damage marked unavailable.
 class DamageDetectionService {
-  static const String _modelAsset = 'assets/damage_yolo11n.onnx';
+  static const String _modelAsset = 'assets/damage_yolov8n.onnx';
   static const int _inputSize = 640;
 
-  /// Class index → display name. The shipped YOLO11n model has a single generic
-  /// damage class (metadata `names = {0: 'Damage-detection-on-medicine-v2'}`,
-  /// trained on a `nc: 1` dataset), mapped here to a clean label for the UI.
-  /// It therefore reports *that* a box is damaged, not what kind of damage it
-  /// is. To report dent/tear/crush separately, re-annotate the dataset with
-  /// those classes, retrain, and add the new indices here — the name flows
-  /// through [DamageFinding.label] into the reports with no other app change.
-  static const Map<int, String> _classNames = {0: 'Damage'};
+  /// Class index → display name, taken from the model's training metadata
+  /// (`names = {0: 'Dent', 1: 'Scratches'}`). Keep in sync if you retrain with
+  /// different/added classes.
+  static const Map<int, String> _classNames = {0: 'Dent', 1: 'Scratches'};
 
   /// Minimum class score for a detection to survive, and IoU above which two
   /// same-class boxes are treated as duplicates during NMS. 0.40 matches the
@@ -100,11 +85,8 @@ class DamageDetectionService {
     }
   }
 
-  /// Runs the detector over each captured box side. Keying by [BoxSlot] (rather
-  /// than a bare path list) is what lets a finding name the side it came from.
-  static Future<DamageCheckResult> check(
-      Map<BoxSlot, String> photoPathsBySlot) async {
-    if (photoPathsBySlot.isEmpty) {
+  static Future<DamageCheckResult> check(List<String> photoPaths) async {
+    if (photoPaths.isEmpty) {
       return const DamageCheckResult(
         available: false,
         message: 'No photos captured to check for damage.',
@@ -122,52 +104,32 @@ class DamageDetectionService {
       );
     }
 
-    final findings = <DamageFinding>[];
+    final allDetections = <String>[];
+    var anyDamaged = false;
     var anySucceeded = false;
     var maxConfidence = 0.0;
 
-    // Iterate BoxSlot.values (not the map) so findings are always ordered
-    // front → side → side → back regardless of capture/insertion order.
-    for (final slot in BoxSlot.values) {
-      final path = photoPathsBySlot[slot];
-      if (path == null) continue;
+    for (var i = 0; i < photoPaths.length; i++) {
+      final path = photoPaths[i];
       try {
         final result = _checkOne(session, path);
         anySucceeded = true;
-        debugPrint('Damage[${slot.sideName}] '
+        debugPrint('Damage[${i + 1}/${photoPaths.length}] '
             '${result.detections.isEmpty ? 'clean' : result.detections.join(', ')}'
             ' (max ${(result.maxConfidence * 100).toStringAsFixed(0)}%)');
-        if (!result.isDamaged) continue;
-
-        // One finding per side per damage type, so a multi-class retrain
-        // reports "Front — Dent" and "Front — Tear" separately.
-        final spotsByLabel = <String, int>{};
-        final confByLabel = <String, double>{};
-        for (var i = 0; i < result.detections.length; i++) {
-          final label = result.detections[i];
-          spotsByLabel[label] = (spotsByLabel[label] ?? 0) + 1;
-          final score = result.scores[i];
-          if (score > (confByLabel[label] ?? 0.0)) confByLabel[label] = score;
-        }
-        for (final entry in spotsByLabel.entries) {
-          findings.add(DamageFinding(
-            slot: slot,
-            label: entry.key,
-            spotCount: entry.value,
-            confidence: confByLabel[entry.key] ?? 0.0,
-          ));
-        }
-        if (result.maxConfidence > maxConfidence) {
-          maxConfidence = result.maxConfidence;
+        if (result.isDamaged) {
+          anyDamaged = true;
+          allDetections.addAll(result.detections);
+          if (result.maxConfidence > maxConfidence) {
+            maxConfidence = result.maxConfidence;
+          }
         }
       } catch (e) {
         debugPrint('Damage check failed for $path: $e');
       }
     }
-
-    final anyDamaged = findings.isNotEmpty;
-    debugPrint('Damage: scanned ${photoPathsBySlot.length} box photo(s); '
-        'damaged=$anyDamaged; sides=${findings.map((f) => f.slot.sideName)}');
+    debugPrint('Damage: scanned ${photoPaths.length} box photo(s); '
+        'damaged=$anyDamaged; classes=${allDetections.toSet()}');
 
     if (!anySucceeded) {
       return const DamageCheckResult(
@@ -176,16 +138,15 @@ class DamageDetectionService {
       );
     }
 
-    final sides = findings.map((f) => f.slot.sideName).toSet().join(', ');
     final message = anyDamaged
-        ? 'Packaging damage detected on: $sides.'
-        : 'No packaging damage detected on any side.';
+        ? 'Possible packaging damage detected: ${allDetections.toSet().join(', ')}.'
+        : 'No packaging damage detected.';
 
     return DamageCheckResult(
       available: true,
       message: message,
       isDamaged: anyDamaged,
-      findings: findings,
+      detections: allDetections,
       maxConfidence: maxConfidence,
     );
   }
@@ -275,18 +236,15 @@ class DamageDetectionService {
 
     final kept = _nms(candidates, _iouThreshold);
     final detections = <String>[];
-    final scores = <double>[];
     var maxConfidence = 0.0;
     for (final d in kept) {
       detections.add(_classNames[d.cls] ?? 'Damage');
-      scores.add(d.score);
       if (d.score > maxConfidence) maxConfidence = d.score;
     }
 
     return _SingleImageResult(
       isDamaged: detections.isNotEmpty,
       detections: detections,
-      scores: scores,
       maxConfidence: maxConfidence,
     );
   }
