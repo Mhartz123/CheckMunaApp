@@ -1,16 +1,26 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import 'camera_screen.dart';
+import 'packaging_type_screen.dart';
 
 /// The Homepage tab. Replaces the old always-mounted Scan tab — Label
-/// checking, Damage checking, and Inspection Mode (both, combined) are each
-/// launched from here as their own pushed CameraScreen route.
+/// checking opens the camera directly; Damage Detection and Inspection Mode
+/// first go through PackagingTypeScreen to pick Box/Foil/Bottle, since both
+/// include a damage step.
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
-  void _openCamera(BuildContext context, CameraMode mode) {
+  void _openLabelCamera(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => CameraScreen(mode: mode)),
+      MaterialPageRoute(
+        builder: (_) => const CameraScreen(mode: CameraMode.label),
+      ),
+    );
+  }
+
+  void _openPackagingPicker(BuildContext context, CameraMode mode) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => PackagingTypeScreen(mode: mode)),
     );
   }
 
@@ -67,7 +77,7 @@ class DashboardScreen extends StatelessWidget {
                       iconColor: AppColors.labelKind,
                       title: 'Check Labels',
                       description: 'Check product labels for compliance.',
-                      onTap: () => _openCamera(context, CameraMode.label),
+                      onTap: () => _openLabelCamera(context),
                     ),
                     const SizedBox(height: 12),
                     _DashboardCard(
@@ -76,7 +86,8 @@ class DashboardScreen extends StatelessWidget {
                       title: 'Damage Detection',
                       description:
                       'Check product packaging for damage.',
-                      onTap: () => _openCamera(context, CameraMode.damage),
+                      onTap: () =>
+                          _openPackagingPicker(context, CameraMode.damage),
                     ),
                     const SizedBox(height: 12),
                     _DashboardCard(
@@ -86,8 +97,8 @@ class DashboardScreen extends StatelessWidget {
                       description:
                       'Check product labels for compliance and '
                           'packaging for damage.',
-                      onTap: () =>
-                          _openCamera(context, CameraMode.inspection),
+                      onTap: () => _openPackagingPicker(
+                          context, CameraMode.inspection),
                     ),
                   ],
                 ),

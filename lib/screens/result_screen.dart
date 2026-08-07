@@ -12,7 +12,7 @@ class ResultScreen extends StatelessWidget {
       case ScanKind.label:
         return 'Label Scan Result';
       case ScanKind.damage:
-        return 'Box / Damage Result';
+        return 'Packaging / Damage Result';
       case ScanKind.both:
         return 'Inspection Result';
     }
@@ -162,13 +162,36 @@ class ResultScreen extends StatelessWidget {
                     const SizedBox(height: 24),
                   ],
 
-                  // ── Packaging / box damage — hidden for a label-only scan ──
+                  // ── Packaging / damage — hidden for a label-only scan ──
                   if (record.hasDamageData) ...[
                     if (record.hasLabelData) const Divider(height: 1),
                     if (record.hasLabelData) const SizedBox(height: 16),
-                    const Text('Packaging / box damage',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 14)),
+                    Row(
+                      children: [
+                        const Text('Packaging / damage',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 14)),
+                        if (record.packagingType != null) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              record.packagingType!.label,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                     const SizedBox(height: 8),
                     _DamageSection(damage: record.damageCheck),
                   ],
@@ -218,11 +241,12 @@ class ResultScreen extends StatelessWidget {
   }
 }
 
-/// Box/packaging damage result, from the separate YOLOv8 box-photo step.
-/// [DamageCheckResult.available] is false when the check couldn't run (offline
-/// / backend unreachable, or — for a label-only scan — simply never run) —
-/// shown as a neutral "unavailable" state distinct from a clean "no damage"
-/// pass.
+/// Packaging damage result, from whichever `PackagingDamageDetector` handled
+/// the chosen [PackagingType] (see `packaging_damage_service.dart`).
+/// [DamageCheckResult.available] is false when the check couldn't run —
+/// offline/backend unreachable for a live model, no model wired up yet for
+/// this packaging type, or (for a label-only scan) simply never run — shown
+/// as a neutral "unavailable" state distinct from a clean "no damage" pass.
 class _DamageSection extends StatelessWidget {
   final DamageCheckResult damage;
 

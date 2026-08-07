@@ -1,10 +1,10 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/scan_record.dart';
-import 'damage_detection_service.dart';
 import 'fda_dataset_checker.dart';
 import 'label_parser.dart';
 import 'onnx_semantic_matcher.dart';
+import 'packaging_damage_service.dart';
 
 /// Three independent scan flows (see CameraScreen's `CameraMode`), each
 /// producing its own [ScanRecord]:
@@ -19,9 +19,13 @@ import 'onnx_semantic_matcher.dart';
 ///    detected, or the user verified none is printed on the packaging.
 ///    **Compliant** when none of the above fire.
 ///
-///  • [analyzeDamage] — damage-only. **Non-compliant** if the box-damage
-///    model reports severe damage (≥ [_damageConfidenceThreshold]) or
-///    scratches ([DamageDetectionService]). **Compliant** otherwise.
+///  • [analyzeDamage] — damage-only. Runs whichever [PackagingDamageDetector]
+///    is registered for the given [PackagingType] (see
+///    `packaging_damage_service.dart`). **Non-compliant** if it reports
+///    severe damage (≥ [_damageConfidenceThreshold]) or scratches.
+///    **Compliant** otherwise — including when the detector isn't available
+///    (e.g. a packaging type with no model yet), since there's nothing to
+///    flag.
 ///
 ///  • [analyzeInspection] — Inspection Mode: runs both checks above in one
 ///    scan and combines them into a single verdict (banned name overrides
@@ -53,16 +57,20 @@ class ComplianceEngine {
 
   /// Kicks off the model + FDA dataset asset loads early (e.g. from
   /// CameraScreen.initState) so the first scan's analyze call isn't stuck
-  /// paying full load latency while the user is still framing photos. Safe to
-  /// call regardless of which scan mode the user picks — it warms all of them.
-  static void warmUp() {
+  /// paying full load latency while the user is still framing photos.
+  /// [packagingType] is optional — pass it (from CameraScreen, once the user
+  /// has picked one) to also warm that packaging type's damage detector;
+  /// omit it for a label-only scan, which has no damage step to warm.
+  static void warmUp({PackagingType? packagingType}) {
     // ignore: unawaited_futures
     FdaDatasetChecker.ensureLoaded();
-    // ignore: unawaited_futures
-    DamageDetectionService.warmUp();
     if (_semanticMatcherEnabled) {
       // ignore: unawaited_futures
       OnnxSemanticMatcher.instance();
+    }
+    if (packagingType != null) {
+      // ignore: unawaited_futures
+      PackagingDamageService.warmUp(packagingType);
     }
   }
 
@@ -108,19 +116,23 @@ class ComplianceEngine {
       ingredients: s.fields.ingredients,
       extractedText: combinedText,
       damageCheck: const DamageCheckResult.notPerformed(),
+      packagingType: null,
       scannedAt: DateTime.now(),
     );
   }
 
   // ── Damage-only ────────────────────────────────────────────────────────
 
-  /// Runs the box/packaging-damage check only. [boxPhotoPaths] are the
-  /// full-frame box shots fed to the damage model.
+  /// Runs the packaging-damage check only, against whichever detector is
+  /// registered for [packagingType]. [boxPhotoPaths] are the full-frame
+  /// packaging shots fed to that detector.
   static Future<ScanRecord> analyzeDamage({
+    required PackagingType packagingType,
     required List<String> boxPhotoPaths,
     void Function(ScanStage stage)? onStageChange,
   }) async {
-    final damage = await _computeDamage(boxPhotoPaths, onStageChange);
+    final damage =
+    await _computeDamage(packagingType, boxPhotoPaths, onStageChange);
     final bool damageFails = _damageFails(damage);
 
     final ComplianceStatus status = damageFails
@@ -137,19 +149,22 @@ class ComplianceEngine {
       ingredients: '—',
       extractedText: '',
       damageCheck: damage,
+      packagingType: packagingType,
       scannedAt: DateTime.now(),
     );
   }
 
   // ── Inspection Mode (both) ────────────────────────────────────────────
 
-  /// Runs the label check AND the box/damage check in one scan, combining
-  /// them into a single verdict. [textBySlot]/[combinedText]/[ocrConfidence]
-  /// are the label-side inputs (see [analyzeLabel]); [boxPhotoPaths] are the
-  /// damage-side inputs (see [analyzeDamage]).
+  /// Runs the label check AND the packaging-damage check in one scan,
+  /// combining them into a single verdict. [textBySlot]/[combinedText]/
+  /// [ocrConfidence] are the label-side inputs (see [analyzeLabel]);
+  /// [packagingType]/[boxPhotoPaths] are the damage-side inputs (see
+  /// [analyzeDamage]).
   static Future<ScanRecord> analyzeInspection({
     required Map<PhotoSlot, String> textBySlot,
     required String combinedText,
+    required PackagingType packagingType,
     required List<String> boxPhotoPaths,
     double? ocrConfidence,
     bool expirationDeclaredMissing = false,
@@ -164,7 +179,8 @@ class ComplianceEngine {
       ingredientsDeclaredMissing: ingredientsDeclaredMissing,
       onStageChange: onStageChange,
     );
-    final damage = await _computeDamage(boxPhotoPaths, onStageChange);
+    final damage =
+    await _computeDamage(packagingType, boxPhotoPaths, onStageChange);
     final bool damageFails = _damageFails(damage);
 
     final ComplianceStatus status = s.banned
@@ -203,6 +219,7 @@ class ComplianceEngine {
       ingredients: s.fields.ingredients,
       extractedText: combinedText,
       damageCheck: damage,
+      packagingType: packagingType,
       scannedAt: DateTime.now(),
     );
   }
@@ -264,11 +281,12 @@ class ComplianceEngine {
   }
 
   static Future<DamageCheckResult> _computeDamage(
+      PackagingType packagingType,
       List<String> boxPhotoPaths,
       void Function(ScanStage stage)? onStageChange,
       ) async {
     onStageChange?.call(ScanStage.checkingDamage);
-    return DamageDetectionService.check(boxPhotoPaths);
+    return PackagingDamageService.check(packagingType, boxPhotoPaths);
   }
 
   static bool _damageFails(DamageCheckResult damage) =>

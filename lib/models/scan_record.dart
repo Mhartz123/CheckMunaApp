@@ -4,11 +4,52 @@ import 'package:flutter/material.dart';
 enum ComplianceStatus { compliant, nonCompliant, banned }
 
 /// Which check(s) a [ScanRecord] represents. Label checking and box/damage
-/// checking are now two independent scan flows (see CameraScreen/
+/// checking are two independent scan flows (see CameraScreen/
 /// ComplianceEngine), each producing its own record — [label] or [damage].
 /// [both] exists only to keep loading old records (saved before this split)
 /// working: they carry both label and damage data in one record.
 enum ScanKind { label, damage, both }
+
+/// Which kind of packaging a damage check ([ScanKind.damage] or
+/// [ScanKind.both]) was run against. The user picks one on
+/// PackagingTypeScreen before the camera opens for any flow that includes a
+/// damage step.
+///
+/// Only [box] has a real detection model right now ([hasModel]) — [foil] and
+/// [bottle] are wired up end-to-end as placeholders (capture flow, picker UI,
+/// record storage) so a future model only needs a new
+/// `PackagingDamageDetector` registered in `packaging_damage_service.dart`;
+/// nothing else in the app needs to change.
+enum PackagingType { box, foil, bottle }
+
+extension PackagingTypeX on PackagingType {
+  String get label {
+    switch (this) {
+      case PackagingType.box:
+        return 'Box';
+      case PackagingType.foil:
+        return 'Foil';
+      case PackagingType.bottle:
+        return 'Bottle';
+    }
+  }
+
+  /// Whether a real detection model is wired up for this packaging type yet.
+  /// See the class doc above — [foil] and [bottle] are placeholders until
+  /// their models ship.
+  bool get hasModel => this == PackagingType.box;
+
+  IconData get icon {
+    switch (this) {
+      case PackagingType.box:
+        return Icons.inventory_2_outlined;
+      case PackagingType.foil:
+        return Icons.texture_outlined;
+      case PackagingType.bottle:
+        return Icons.liquor_outlined;
+    }
+  }
+}
 
 /// The three fixed label-capture slots for a single product scan. Each slot's
 /// OCR text is routed straight to its own record field (see LabelParser)
@@ -30,9 +71,11 @@ extension PhotoSlotX on PhotoSlot {
   }
 }
 
-/// The four box-capture slots for the packaging-damage step. These are
-/// full-frame shots of the whole box (no crop, no OCR) sent to the YOLOv8
-/// damage API — a separate concern from the label slots above.
+/// The four packaging-capture slots for the damage step. These are
+/// full-frame shots of the whole item (no crop, no OCR) sent to whichever
+/// [PackagingDamageDetector] handles the chosen [PackagingType] — a separate
+/// concern from the label slots above. Reused for every packaging type: the
+/// four-angle capture shape doesn't change, only which detector processes it.
 enum BoxSlot { front, side1, side2, back }
 
 extension BoxSlotX on BoxSlot {
@@ -50,18 +93,20 @@ extension BoxSlotX on BoxSlot {
   }
 }
 
-/// Result of a packaging-damage check via [DamageDetectionService] (backed
-/// by the labelcheck-apii Roboflow workflow). [available] is false when the
-/// check couldn't run at all (no network, backend unreachable) — distinct
-/// from [isDamaged], which is only meaningful when [available] is true.
+/// Result of a packaging-damage check via a `PackagingDamageDetector` (see
+/// `packaging_damage_service.dart`). [available] is false when the check
+/// couldn't run at all — no network/backend for a live model, or (for
+/// [PackagingType.foil]/[PackagingType.bottle] today) because no model is
+/// wired up yet — distinct from [isDamaged], which is only meaningful when
+/// [available] is true.
 class DamageCheckResult {
   final bool available;
   final String message;
   final bool isDamaged;
   final List<String> detections;
 
-  /// Highest detection confidence (0..1) the damage API returned across all
-  /// box photos, used to gate whether "severe" damage counts against
+  /// Highest detection confidence (0..1) the damage model returned across all
+  /// packaging photos, used to gate whether "severe" damage counts against
   /// compliance. 0 when nothing was detected or confidence wasn't reported.
   final double maxConfidence;
 
@@ -81,7 +126,7 @@ class DamageCheckResult {
         maxConfidence = 0.0;
 
   /// Used for label-only scans, where the damage check was never run because
-  /// the user chose "Check Label" rather than "Check Box / Damage".
+  /// the user chose "Check Labels" rather than a damage-inclusive flow.
   const DamageCheckResult.notPerformed()
       : available = false,
         message = 'Damage check not performed for this scan.',
@@ -127,6 +172,12 @@ class ScanRecord {
   final String ingredients;
   final String extractedText;
   final DamageCheckResult damageCheck;
+
+  /// Which packaging type the damage check ran against — null for a
+  /// label-only ([ScanKind.label]) record, or for records saved before this
+  /// field existed.
+  final PackagingType? packagingType;
+
   final DateTime scannedAt;
 
   const ScanRecord({
@@ -139,6 +190,7 @@ class ScanRecord {
     required this.ingredients,
     required this.extractedText,
     required this.damageCheck,
+    this.packagingType,
     required this.scannedAt,
   });
 
@@ -173,6 +225,7 @@ class ScanRecord {
     'ingredients': ingredients,
     'extractedText': extractedText,
     'damageCheck': damageCheck.toJson(),
+    if (packagingType != null) 'packagingType': packagingType!.name,
     'scannedAt': scannedAt.toIso8601String(),
   };
 
@@ -187,6 +240,7 @@ class ScanRecord {
     extractedText: json['extractedText'] as String? ?? '',
     damageCheck:
     DamageCheckResult.fromJson(json['damageCheck'] as Map<String, dynamic>?),
+    packagingType: _packagingTypeFromName(json['packagingType'] as String?),
     scannedAt: DateTime.tryParse(json['scannedAt'] as String? ?? '') ??
         DateTime.now(),
   );
@@ -206,6 +260,14 @@ class ScanRecord {
           (k) => k.name == name,
       orElse: () => ScanKind.both,
     );
+  }
+
+  static PackagingType? _packagingTypeFromName(String? name) {
+    if (name == null) return null;
+    for (final t in PackagingType.values) {
+      if (t.name == name) return t;
+    }
+    return null;
   }
 }
 

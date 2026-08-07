@@ -776,6 +776,7 @@ class _RecordCard extends StatelessWidget {
     final record = ScanStore.load(dir);
     final status = record?.statusLabel ?? '—';
     final keyword = record?.matchedKeyword ?? '—';
+    final packagingType = record?.packagingType;
     final visuals = _statusVisuals(status);
 
     return GestureDetector(
@@ -877,7 +878,7 @@ class _RecordCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
 
-                    // Compliance pill + detection basis
+                    // Compliance pill (+ packaging type, if any) + detection basis
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -897,6 +898,25 @@ class _RecordCard extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (packagingType != null) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceAlt,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              packagingType.label,
+                              style: const TextStyle(
+                                fontSize: 10.5,
+                                color: AppColors.muted,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     if (keyword != '—') ...[

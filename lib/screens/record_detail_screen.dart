@@ -178,13 +178,25 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
             ),
             const SizedBox(height: 16),
 
-            // ── Packaging / box damage — hidden for a label-only scan ────
+            // ── Packaging / damage — hidden for a label-only scan ────────
             if (record.hasDamageData) ...[
-              Text('PACKAGING / BOX DAMAGE',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.muted)),
+              Row(
+                children: [
+                  Text('PACKAGING / DAMAGE',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.muted)),
+                  if (record.packagingType != null) ...[
+                    const SizedBox(width: 6),
+                    Text('· ${record.packagingType!.label}',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.muted)),
+                  ],
+                ],
+              ),
               const SizedBox(height: 6),
               _damageBlock(record),
               const SizedBox(height: 16),

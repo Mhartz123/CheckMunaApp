@@ -13,8 +13,9 @@ import 'result_screen.dart';
 
 /// Which independent scan this camera session runs. Label checking and
 /// box/damage checking are separate flows; Inspection Mode runs both in one
-/// session (label slots, then box slots) and produces a single combined
-/// record. The user picks one on the Homepage before the camera opens.
+/// session (label slots, then packaging slots) and produces a single
+/// combined record. The user picks one on the Homepage before the camera
+/// opens.
 enum CameraMode { label, damage, inspection }
 
 /// Which slot group is currently being captured. Fixed for [CameraMode.label]
@@ -36,7 +37,7 @@ enum _ScanUiStage {
 /// One label-capture step.
 typedef _LabelSpec = ({PhotoSlot slot, String title, String helper});
 
-/// One box-capture step.
+/// One packaging-capture step.
 typedef _BoxSpec = ({BoxSlot slot, String title, String helper});
 
 const List<_LabelSpec> _labelSlots = [
@@ -54,29 +55,6 @@ const List<_LabelSpec> _labelSlots = [
   slot: PhotoSlot.ingredients,
   title: 'Ingredient list',
   helper: 'Frame the ingredient list inside the guide',
-  ),
-];
-
-const List<_BoxSpec> _boxSlots = [
-  (
-  slot: BoxSlot.front,
-  title: 'Box — Front',
-  helper: 'Fit the whole front of the box inside the guide',
-  ),
-  (
-  slot: BoxSlot.side1,
-  title: 'Box — Side',
-  helper: 'Fit one side of the box inside the guide',
-  ),
-  (
-  slot: BoxSlot.side2,
-  title: 'Box — Other side',
-  helper: 'Fit the other side of the box inside the guide',
-  ),
-  (
-  slot: BoxSlot.back,
-  title: 'Box — Back',
-  helper: 'Fit the whole back of the box inside the guide',
   ),
 ];
 
@@ -98,7 +76,17 @@ const Size _expirationGuideSize = Size(210, 100);
 class CameraScreen extends StatefulWidget {
   final CameraMode mode;
 
-  const CameraScreen({super.key, required this.mode});
+  /// Which packaging type the damage step should run against — required for
+  /// [CameraMode.damage] and [CameraMode.inspection] (chosen on
+  /// PackagingTypeScreen before this screen opens); unused for
+  /// [CameraMode.label].
+  final PackagingType? packagingType;
+
+  const CameraScreen({super.key, required this.mode, this.packagingType})
+      : assert(
+  mode == CameraMode.label || packagingType != null,
+  'packagingType is required for damage and inspection scans',
+  );
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -145,6 +133,37 @@ class _CameraScreenState extends State<CameraScreen>
 
   bool get _isLabelPhase => _phase == _CapturePhase.label;
 
+  /// The four packaging-capture steps, titled for whichever [PackagingType]
+  /// was chosen (Box / Foil / Bottle). The capture shape (front/side/side/
+  /// back) is shared across all packaging types — only the label text and
+  /// which detector processes the photos afterward changes.
+  List<_BoxSpec> get _boxSlots {
+    final typeLabel = (widget.packagingType ?? PackagingType.box).label;
+    final lower = typeLabel.toLowerCase();
+    return [
+      (
+      slot: BoxSlot.front,
+      title: '$typeLabel — Front',
+      helper: 'Fit the whole front of the $lower inside the guide',
+      ),
+      (
+      slot: BoxSlot.side1,
+      title: '$typeLabel — Side',
+      helper: 'Fit one side of the $lower inside the guide',
+      ),
+      (
+      slot: BoxSlot.side2,
+      title: '$typeLabel — Other side',
+      helper: 'Fit the other side of the $lower inside the guide',
+      ),
+      (
+      slot: BoxSlot.back,
+      title: '$typeLabel — Back',
+      helper: 'Fit the whole back of the $lower inside the guide',
+      ),
+    ];
+  }
+
   int get _slotCount =>
       _isLabelPhase ? _labelSlots.length : _boxSlots.length;
 
@@ -188,15 +207,16 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// Badge text describing what this camera session is doing right now.
   String get _modeBadgeText {
+    final typeLabel = widget.packagingType?.label.toUpperCase();
     switch (widget.mode) {
       case CameraMode.label:
         return 'LABEL CHECK';
       case CameraMode.damage:
-        return 'BOX / DAMAGE CHECK';
+        return '$typeLabel DAMAGE CHECK';
       case CameraMode.inspection:
         return _isLabelPhase
             ? 'INSPECTION · LABEL STEP'
-            : 'INSPECTION · BOX STEP';
+            : 'INSPECTION · $typeLabel STEP';
     }
   }
 
@@ -211,11 +231,11 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Framing-guide dimensions. Box shots use a fixed upright rectangle. Label
-  /// close-ups use the user-selected [_guidePresets] entry so oversized/long
-  /// logos don't drag in surrounding text — except the expiration slot, which
-  /// is locked to a small tight frame ([_expirationGuideSize]) so nearby text
-  /// can't be mistaken for the date.
+  /// Framing-guide dimensions. Packaging shots use a fixed upright rectangle.
+  /// Label close-ups use the user-selected [_guidePresets] entry so
+  /// oversized/long logos don't drag in surrounding text — except the
+  /// expiration slot, which is locked to a small tight frame
+  /// ([_expirationGuideSize]) so nearby text can't be mistaken for the date.
   Size get _guideSize {
     if (!_isLabelPhase) return const Size(300, 360);
     if (_currentLabelSlot == PhotoSlot.expiration) return _expirationGuideSize;
@@ -232,12 +252,12 @@ class _CameraScreenState extends State<CameraScreen>
         ? _CapturePhase.box
         : _CapturePhase.label;
     _initCamera(_cameraIndex);
-    // Prefetch the FDA dataset (and DistilBERT if enabled) while the user is
-    // still framing/capturing photos, so analysis doesn't pay full load
-    // latency.
-    ComplianceEngine.warmUp();
-    // Wide boxes are easier to capture tilted, so allow landscape only while
-    // this screen is open; every other screen stays portrait-locked.
+    // Prefetch the FDA dataset (and DistilBERT if enabled), plus the chosen
+    // packaging type's damage detector, while the user is still framing/
+    // capturing photos, so analysis doesn't pay full load latency.
+    ComplianceEngine.warmUp(packagingType: widget.packagingType);
+    // Wide packaging is easier to capture tilted, so allow landscape only
+    // while this screen is open; every other screen stays portrait-locked.
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
       DeviceOrientation.landscapeLeft,
@@ -369,7 +389,7 @@ class _CameraScreenState extends State<CameraScreen>
         final slot = _labelSlots[_slotIndex].slot;
         _labelPaths[slot] = croppedPath;
       } else {
-        // Box shots are used full-frame for damage detection — no crop.
+        // Packaging shots are used full-frame for damage detection — no crop.
         _boxPaths[_boxSlots[_slotIndex].slot] = photo.path;
       }
 
@@ -416,19 +436,20 @@ class _CameraScreenState extends State<CameraScreen>
       return;
     }
 
-    // Inspection Mode: after the last label slot, move on to the box phase
-    // instead of analyzing yet.
+    // Inspection Mode: after the last label slot, move on to the packaging
+    // phase instead of analyzing yet.
     if (widget.mode == CameraMode.inspection && _isLabelPhase) {
       setState(() {
         _phase = _CapturePhase.box;
         _slotIndex = 0;
       });
       if (mounted) {
+        final typeLabel = (widget.packagingType ?? PackagingType.box).label;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Label photos done — now photograph the box.'),
-            backgroundColor: Color(0xFF4CAF50),
-            duration: Duration(seconds: 2),
+          SnackBar(
+            content: Text('Label photos done — now photograph the $typeLabel.'),
+            backgroundColor: const Color(0xFF4CAF50),
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -516,7 +537,7 @@ class _CameraScreenState extends State<CameraScreen>
     await _finishAnalysis(record);
   }
 
-  // ── Run the box/damage analysis directly — no OCR involved ─────────────
+  // ── Run the packaging/damage analysis directly — no OCR involved ───────
   Future<void> _runDamageAnalysis() async {
     setState(() {
       _isProcessing = true;
@@ -524,6 +545,7 @@ class _CameraScreenState extends State<CameraScreen>
     });
 
     final record = await ComplianceEngine.analyzeDamage(
+      packagingType: widget.packagingType!,
       boxPhotoPaths: _capturedBoxPaths,
     );
 
@@ -542,6 +564,7 @@ class _CameraScreenState extends State<CameraScreen>
     final record = await ComplianceEngine.analyzeInspection(
       textBySlot: ocr.textBySlot,
       combinedText: ocr.combinedText,
+      packagingType: widget.packagingType!,
       boxPhotoPaths: _capturedBoxPaths,
       ocrConfidence: ocr.nameConfidence,
       expirationDeclaredMissing:
@@ -1302,7 +1325,8 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// First word of a slot title, used as the compact thumbnail caption.
   static String _shortTitle(String title) {
-    final cleaned = title.replaceFirst('Box — ', '');
+    final dashIndex = title.indexOf('—');
+    final cleaned = dashIndex == -1 ? title : title.substring(dashIndex + 1).trim();
     return cleaned.split(' ').first;
   }
 }
@@ -1539,14 +1563,14 @@ class _ScanProgressCard extends StatelessWidget {
     _ScanUiStage.extractingText: 'Reading text from your label photos',
     _ScanUiStage.matchingRegistry: 'Checking against the FDA database',
     _ScanUiStage.classifying: 'Running the compliance model',
-    _ScanUiStage.checkingDamage: 'Inspecting the box for damage',
+    _ScanUiStage.checkingDamage: 'Inspecting the packaging for damage',
   };
 
   static const _stepLabels = {
     _ScanUiStage.extractingText: 'Extracting label text (OCR)',
     _ScanUiStage.matchingRegistry: 'Matching FDA registry',
     _ScanUiStage.classifying: 'Classifying label result',
-    _ScanUiStage.checkingDamage: 'Checking box for damage',
+    _ScanUiStage.checkingDamage: 'Checking packaging for damage',
   };
 
   @override
