@@ -7,6 +7,10 @@ import 'packaging_type_screen.dart';
 /// checking opens the camera directly; Damage Detection and Inspection Mode
 /// first go through PackagingTypeScreen to pick Box/Foil/Bottle, since both
 /// include a damage step.
+///
+/// Cards are big and non-scrolling by design: exactly three of them, each
+/// taking an equal share of the available height below the header, so the
+/// whole screen fills without a scroll gesture.
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
@@ -66,17 +70,21 @@ class DashboardScreen extends StatelessWidget {
               ),
             ),
 
-            // ── Scan options ──────────────────────────────────────────
+            // ── Scan options — fills remaining space, no scroll ────────
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(14, 20, 14, 14),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
                 child: Column(
                   children: [
                     _DashboardCard(
                       icon: Icons.list_alt_outlined,
                       iconColor: AppColors.labelKind,
                       title: 'Check Labels',
-                      description: 'Check product labels for compliance.',
+                      description:
+                      'Scan the front, expiration date, and ingredients '
+                          'panel of a product label. We check it against the '
+                          'FDA registry and flag anything expired, '
+                          'unregistered, or missing required information.',
                       onTap: () => _openLabelCamera(context),
                     ),
                     const SizedBox(height: 12),
@@ -85,7 +93,10 @@ class DashboardScreen extends StatelessWidget {
                       iconColor: AppColors.damageKind,
                       title: 'Damage Detection',
                       description:
-                      'Check product packaging for damage.',
+                      'Photograph packaging from multiple angles and '
+                          'we\'ll scan for dents, tears, or scratches using '
+                          'on-device detection — works even without an '
+                          'internet connection.',
                       onTap: () =>
                           _openPackagingPicker(context, CameraMode.damage),
                     ),
@@ -95,8 +106,9 @@ class DashboardScreen extends StatelessWidget {
                       iconColor: AppColors.inspection,
                       title: 'Inspection Mode',
                       description:
-                      'Check product labels for compliance and '
-                          'packaging for damage.',
+                      'Run both checks in one pass — scan the label for '
+                          'compliance and photograph the packaging for '
+                          'damage, then get a single combined result.',
                       onTap: () => _openPackagingPicker(
                           context, CameraMode.inspection),
                     ),
@@ -128,56 +140,65 @@ class _DashboardCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Tinted icon box — same treatment as status icons on Records
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: iconColor, size: 26),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
+    // Expanded so three cards in a Column split the available height evenly
+    // — this is what keeps the whole screen non-scrolling.
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.text,
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: iconColor.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(icon, color: iconColor, size: 28),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.text,
+                        height: 1.15,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    description,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.muted,
-                      height: 1.35,
-                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Icon(Icons.chevron_right,
+                        color: AppColors.accentLight, size: 24),
                   ),
                 ],
               ),
-            ),
-            Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
-          ],
+              const SizedBox(height: 12),
+              Expanded(
+                child: Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: AppColors.muted,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -13,6 +13,9 @@ import 'camera_screen.dart';
 /// soon" but are fully tappable — the capture flow and record storage work
 /// the same for all three, so a future model just needs to be registered in
 /// `packaging_damage_service.dart`.
+///
+/// Matches DashboardScreen's card treatment: exactly three big cards, each
+/// an equal share of the available height, no scrolling.
 class PackagingTypeScreen extends StatelessWidget {
   final CameraMode mode; // CameraMode.damage or CameraMode.inspection
 
@@ -33,7 +36,9 @@ class PackagingTypeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('What are you checking?',
             style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.text)),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.text)),
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
         elevation: 0,
@@ -44,21 +49,16 @@ class PackagingTypeScreen extends StatelessWidget {
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Select the packaging type for the damage check.',
-                style: TextStyle(fontSize: 13, color: AppColors.muted),
-              ),
-              const SizedBox(height: 16),
               for (final type in PackagingType.values) ...[
                 _PackagingCard(
                   type: type,
                   onTap: () => _openCamera(context, type),
                 ),
-                const SizedBox(height: 12),
+                if (type != PackagingType.values.last)
+                  const SizedBox(height: 12),
               ],
             ],
           ),
@@ -74,74 +74,104 @@ class _PackagingCard extends StatelessWidget {
 
   const _PackagingCard({required this.type, required this.onTap});
 
+  String get _description {
+    switch (type) {
+      case PackagingType.box:
+        return 'Photograph the box from four sides and we\'ll scan for '
+            'dents or scratches using the on-device detection model.';
+      case PackagingType.foil:
+        return 'Photograph foil packaging — sachets, blister packs, and '
+            'similar — from four sides. The capture flow is ready; the '
+            'detection model for this packaging type hasn\'t been trained '
+            'yet.';
+      case PackagingType.bottle:
+        return 'Photograph the bottle from four sides. The capture flow is '
+            'ready; the detection model for this packaging type hasn\'t '
+            'been trained yet.';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: AppColors.damageKind.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(type.icon, color: AppColors.damageKind, size: 24),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
+    // Expanded so three cards in a Column split the available height evenly
+    // — matches DashboardScreen's non-scrolling treatment.
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Text(type.label,
-                          style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.text)),
-                      if (!type.hasModel) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceAlt,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'Coming soon',
-                            style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.muted),
-                          ),
-                        ),
-                      ],
-                    ],
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: AppColors.damageKind.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(type.icon,
+                        color: AppColors.damageKind, size: 28),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    type.hasModel
-                        ? 'Detection model ready.'
-                        : 'Capture flow is ready; detection model not '
-                        'trained yet.',
-                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      type.label,
+                      style: const TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.text,
+                        height: 1.15,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Icon(Icons.chevron_right,
+                        color: AppColors.accentLight, size: 24),
                   ),
                 ],
               ),
-            ),
-            Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
-          ],
+              if (!type.hasModel) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceAlt,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'Coming soon',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Expanded(
+                child: Text(
+                  _description,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: AppColors.muted,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
