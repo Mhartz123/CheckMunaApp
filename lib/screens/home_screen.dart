@@ -37,7 +37,7 @@ class HomeScreen extends StatelessWidget {
                       ),
                       const SizedBox(width: 12),
                       const Text(
-                        'VerifyDA',
+                        'CheckMuna',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 24,
@@ -89,28 +89,28 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.camera_alt_outlined,
                       title: 'Take a photo',
                       description:
-                          'Point your camera at a food supplement label and tap the shutter button to capture it.',
+                      'Point your camera at a food supplement label and tap the shutter button to capture it.',
                     ),
                     _Step(
                       number: '2',
                       icon: Icons.drive_file_rename_outline,
                       title: 'Name your scan',
                       description:
-                          'After taking the photo, give it a unique name so you can find it easily in your records later.',
+                      'After taking the photo, give it a unique name so you can find it easily in your records later.',
                     ),
                     _Step(
                       number: '3',
                       icon: Icons.fact_check_outlined,
                       title: 'Check compliance',
                       description:
-                          'Open a record and tap the compliance check. The app scans the label text and tells you if the product is Compliant, Non-Compliant, or Banned.',
+                      'Open a record and tap the compliance check. The app scans the label text and tells you if the product is Compliant, Non-Compliant, or Banned.',
                     ),
                     _Step(
                       number: '4',
                       icon: Icons.folder_outlined,
                       title: 'Manage your records',
                       description:
-                          'View, sort, rename, or delete your saved scans any time from the Records tab.',
+                      'View, sort, rename, or delete your saved scans any time from the Records tab.',
                     ),
                     const SizedBox(height: 24),
 
@@ -128,19 +128,19 @@ class HomeScreen extends StatelessWidget {
                       color: const Color(0xFF4CAF50),
                       label: 'Compliant',
                       description:
-                          'Product is registered and safe to consume. Follow instructions for proper dosage.',
+                      'Product is registered and safe to consume. Follow instructions for proper dosage.',
                     ),
                     _ComplianceLegendItem(
                       color: const Color(0xFFFF9800),
                       label: 'Non-Compliant',
                       description:
-                          'Product does not meet FDA standards. Inadvisable to consume — report to the local FDA hotline.',
+                      'Product does not meet FDA standards. Inadvisable to consume — report to the local FDA hotline.',
                     ),
                     _ComplianceLegendItem(
                       color: const Color(0xFFE57373),
                       label: 'Banned / Warning',
                       description:
-                          'Product is banned by the FDA. Dangerous to consume. Report immediately to the local FDA hotline.',
+                      'Product is banned by the FDA. Dangerous to consume. Report immediately to the local FDA hotline.',
                     ),
                     const SizedBox(height: 24),
 

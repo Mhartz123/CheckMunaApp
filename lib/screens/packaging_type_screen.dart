@@ -1,8 +1,51 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
-import '../widgets/instruction_banner.dart';
+import '../widgets/capture_tips.dart';
 import 'camera_screen.dart';
+
+/// Remembers which packaging type was picked last, so a user working
+/// through a shelf of the same product form does not re-decide every time.
+///
+/// Stored as a one-line file in the app documents directory rather than in
+/// shared_preferences, since path_provider is already a dependency and this
+/// is a single value. A missing or unreadable file just means "no last
+/// choice" — it is a convenience, so it never blocks the screen.
+class _LastPackagingType {
+  static const String _fileName = 'last_packaging_type.txt';
+
+  static Future<File> _file() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File(p.join(dir.path, _fileName));
+  }
+
+  static Future<PackagingType?> read() async {
+    try {
+      final file = await _file();
+      if (!await file.exists()) return null;
+      final name = (await file.readAsString()).trim();
+      for (final type in PackagingType.values) {
+        if (type.name == name) return type;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> write(PackagingType type) async {
+    try {
+      final file = await _file();
+      await file.writeAsString(type.name);
+    } catch (_) {
+      // Not worth surfacing — the next screen still opens correctly.
+    }
+  }
+}
 
 /// Lets the user pick which kind of packaging they're checking before the
 /// camera opens, for any flow that includes a damage step — standalone
@@ -15,23 +58,68 @@ import 'camera_screen.dart';
 /// the same for all three, so a future model just needs to be registered in
 /// `packaging_damage_service.dart`.
 ///
-/// Matches HomeScreen's card treatment: an instruction banner up top, then
-/// three cards that each size to their own text, in a scroll view. A short
-/// list of photo tips sits below the cards, shown before the camera rather
-/// than after a bad scan, since framing is what the damage check is most
-/// sensitive to.
-class PackagingTypeScreen extends StatelessWidget {
+/// Matches HomeScreen's card treatment: three cards that each size to their
+/// own text, in a scroll view. A line above them names which flow the user
+/// is in, since this screen otherwise looks identical whether it was
+/// reached from Damage Detection or Inspection Mode. Photo tips live behind
+/// the help icon in the app bar rather than taking up space on the screen.
+class PackagingTypeScreen extends StatefulWidget {
   final CameraMode mode; // CameraMode.damage or CameraMode.inspection
 
   const PackagingTypeScreen({super.key, required this.mode});
 
+  @override
+  State<PackagingTypeScreen> createState() => _PackagingTypeScreenState();
+}
+
+class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
+  PackagingType? _lastUsed;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLastUsed();
+  }
+
+  Future<void> _loadLastUsed() async {
+    final type = await _LastPackagingType.read();
+    if (!mounted) return;
+    setState(() => _lastUsed = type);
+  }
+
   void _openCamera(BuildContext context, PackagingType type) {
+    // Recorded on the way out rather than after a successful save: the
+    // marker reflects what was last picked here, not what was last scanned.
+    _LastPackagingType.write(type);
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => CameraScreen(mode: mode, packagingType: type),
+        builder: (_) => CameraScreen(mode: widget.mode, packagingType: type),
       ),
     );
   }
+
+  /// Names the flow the user came in on. Inspection Mode reaches this screen
+  /// after the label step is already queued up, which is worth saying — the
+  /// two flows are otherwise indistinguishable from here.
+  String get _flowText {
+    switch (widget.mode) {
+      case CameraMode.inspection:
+        return 'Inspection Mode: label check first, then packaging photos.';
+      case CameraMode.damage:
+        return 'Damage Detection: packaging photos only.';
+      case CameraMode.label:
+      // Label-only never routes here, but the switch has to be total.
+        return 'Label check.';
+    }
+  }
+
+  IconData get _flowIcon => widget.mode == CameraMode.inspection
+      ? Icons.manage_search
+      : Icons.inventory_2_outlined;
+
+  Color get _flowColor => widget.mode == CameraMode.inspection
+      ? AppColors.inspection
+      : AppColors.damageKind;
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +135,15 @@ class PackagingTypeScreen extends StatelessWidget {
         foregroundColor: AppColors.text,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          IconButton(
+            onPressed: () => showCaptureTips(context),
+            icon: const Icon(Icons.help_outline),
+            color: AppColors.muted,
+            iconSize: 20,
+            tooltip: 'Photo tips',
+          ),
+        ],
         shape: const Border(
           bottom: BorderSide(color: AppColors.border, width: 0.6),
         ),
@@ -56,21 +153,27 @@ class PackagingTypeScreen extends StatelessWidget {
           padding: const EdgeInsets.all(14),
           child: Column(
             children: [
-              const InstructionBanner(
-                text: 'Point your camera at the packaging and take a photo '
-                    'of each side we ask for.',
+              _FlowLine(
+                icon: _flowIcon,
+                color: _flowColor,
+                text: _flowText,
+                // Only worth saying once a highlight is actually on screen.
+                note: _lastUsed == null
+                    ? null
+                    : 'The highlighted card is what you checked last.',
               ),
               const SizedBox(height: 12),
               for (final type in PackagingType.values) ...[
                 _PackagingCard(
                   type: type,
+                  isLastUsed: type == _lastUsed,
                   onTap: () => _openCamera(context, type),
                 ),
                 if (type != PackagingType.values.last)
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 16),
               ],
-              const SizedBox(height: 14),
-              const _CaptureTips(),
+              const SizedBox(height: 18),
+              const _NotSureHelper(),
             ],
           ),
         ),
@@ -79,11 +182,83 @@ class PackagingTypeScreen extends StatelessWidget {
   }
 }
 
+/// One-line reminder of which scan the user started. Tinted to match the
+/// flow's colour on the Homepage cards, so the two read as the same thing.
+class _FlowLine extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  /// Optional second line, dimmer than [text]. Used to explain the
+  /// last-used highlight, which is otherwise unlabelled decoration.
+  final String? note;
+
+  const _FlowLine({
+    required this.icon,
+    required this.color,
+    required this.text,
+    this.note,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.20)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 17),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  text,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.text,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (note != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    note!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.muted,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PackagingCard extends StatelessWidget {
   final PackagingType type;
+  final bool isLastUsed;
   final VoidCallback onTap;
 
-  const _PackagingCard({required this.type, required this.onTap});
+  const _PackagingCard({
+    required this.type,
+    required this.isLastUsed,
+    required this.onTap,
+  });
 
   // Kept short on purpose — each card is only as tall as its own text, so
   // a long paragraph here makes one card visibly taller than the others.
@@ -113,6 +288,12 @@ class _PackagingCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(16),
+          // The order of the three cards never changes, so the last-used
+          // one is marked in place rather than moved to the top — a picker
+          // that reorders itself makes the choice harder, not easier.
+          border: isLastUsed
+              ? Border.all(color: AppColors.accent.withValues(alpha: 0.45))
+              : null,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -147,23 +328,25 @@ class _PackagingCard extends StatelessWidget {
                     color: AppColors.accentLight, size: 20),
               ],
             ),
-            if (!type.hasModel) ...[
+            if (isLastUsed || !type.hasModel) ...[
               const SizedBox(height: 6),
-              Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceAlt,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'Coming soon',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.muted,
-                  ),
-                ),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  if (isLastUsed)
+                    _Pill(
+                      text: 'Last used',
+                      color: AppColors.accent,
+                      background: AppColors.accent.withValues(alpha: 0.10),
+                    ),
+                  if (!type.hasModel)
+                    const _Pill(
+                      text: 'Coming soon',
+                      color: AppColors.muted,
+                      background: AppColors.surfaceAlt,
+                    ),
+                ],
               ),
             ],
             const SizedBox(height: 8),
@@ -182,77 +365,201 @@ class _PackagingCard extends StatelessWidget {
   }
 }
 
-/// Plain-language photo tips, shown under the packaging cards. Worded for
-/// pharmacy staff and shoppers rather than developers, so there is no
-/// mention of models, confidence, or detection classes here.
-class _CaptureTips extends StatelessWidget {
-  const _CaptureTips();
+/// Small rounded label. Two can sit side by side on one card (a last-used
+/// Foil or Bottle shows both), which is why they live in a Wrap.
+class _Pill extends StatelessWidget {
+  final String text;
+  final Color color;
+  final Color background;
 
-  /// Kept to one line each on purpose: five wrapped tips push this screen
-  /// past the fold, and a tip nobody reads is worse than a short one.
-  static const List<(IconData, String)> _tips = [
-    (Icons.wb_sunny_outlined, 'Bright light, no shadows on the pack.'),
-    (Icons.crop_free, 'Get close so the pack fills the photo.'),
-    (Icons.layers_clear_outlined, 'Use a plain, empty background.'),
-    (Icons.flare_outlined, 'Tilt shiny packs away from glare.'),
-    (Icons.back_hand_outlined, 'Hold it by the edges, not the damage.'),
-  ];
+  const _Pill({
+    required this.text,
+    required this.color,
+    required this.background,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border, width: 0.6),
+        color: background,
+        borderRadius: BorderRadius.circular(6),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.tips_and_updates_outlined,
-                  color: AppColors.accent, size: 18),
-              const SizedBox(width: 8),
-              const Text(
-                'For the clearest photos',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.text,
-                ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
+  }
+}
+
+/// "Not sure which one?" — opens a short guide to picking a packaging type.
+/// Exists because the three labels are not as self-evident as they look: a
+/// bottle inside a carton fits two of them, and users currently just guess.
+class _NotSureHelper extends StatelessWidget {
+  const _NotSureHelper();
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => _showGuide(context),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.help_outline, color: AppColors.accent, size: 16),
+            const SizedBox(width: 8),
+            Text(
+              'Not sure which one?',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.accent,
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          for (var i = 0; i < _tips.length; i++) ...[
-            if (i != 0) const SizedBox(height: 6),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 1),
-                  child: Icon(_tips[i].$1,
-                      color: AppColors.accentLight, size: 16),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    _tips[i].$2,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: AppColors.muted,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ],
             ),
           ],
-        ],
+        ),
+      ),
+    );
+  }
+
+  static Future<void> _showGuide(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => const _PackagingGuideSheet(),
+    );
+  }
+}
+
+class _PackagingGuideSheet extends StatelessWidget {
+  const _PackagingGuideSheet();
+
+  /// One rule per type, plus the two cases that actually confuse people.
+  /// Deliberately phrased around what the user is holding, not around what
+  /// the product is called.
+  static const List<(PackagingType, String)> _rules = [
+    (
+    PackagingType.box,
+    'Anything in a cardboard carton, even if there is a bottle or foil '
+        'inside it. Photograph the carton.',
+    ),
+    (
+    PackagingType.foil,
+    'Blister packs and sachets. The tablets are sealed into the sheet '
+        'itself.',
+    ),
+    (
+    PackagingType.bottle,
+    'Plastic or glass containers with a cap, whether it holds tablets, '
+        'powder, or liquid.',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Which one am I holding?',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: AppColors.text,
+              ),
+            ),
+            const SizedBox(height: 14),
+            for (var i = 0; i < _rules.length; i++) ...[
+              if (i != 0) const SizedBox(height: 14),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: AppColors.damageKind.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(_rules[i].$1.icon,
+                        color: AppColors.damageKind, size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _rules[i].$1.label,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.text,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _rules[i].$2,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.muted,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Still unsure? Pick whichever describes the outside of what '
+                    'you are holding. That is the surface you will be '
+                    'photographing.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.text,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -346,7 +346,7 @@ class RecordsScreenState extends State<RecordsScreen> {
       // Open the built-in PDF preview (includes share + print buttons)
       await Printing.layoutPdf(
         onLayout: (_) async => pdf.save(),
-        name: 'VerifyDA_Compliance_Report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        name: 'CheckMuna_Compliance_Report_${DateTime.now().millisecondsSinceEpoch}.pdf',
       );
     } catch (e) {
       if (!mounted) return;

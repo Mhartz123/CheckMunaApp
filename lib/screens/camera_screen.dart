@@ -870,7 +870,15 @@ class _CameraScreenState extends State<CameraScreen>
                             Navigator.of(context).pop();
                             final saved = await _saveRecord(raw, record);
                             if (saved && cameraContext.mounted) {
-                              Navigator.of(cameraContext).pop();
+                              // Back to the Homepage rather than to the
+                              // packaging chooser: that screen was a step
+                              // on the way in, and returning to it shows a
+                              // stale "Last used" marker for the scan that
+                              // just finished. popUntil also clears the
+                              // camera and chooser in one go, so a finished
+                              // scan can't be reached with Back.
+                              Navigator.of(cameraContext)
+                                  .popUntil((route) => route.isFirst);
                             }
                           },
                           style: ElevatedButton.styleFrom(

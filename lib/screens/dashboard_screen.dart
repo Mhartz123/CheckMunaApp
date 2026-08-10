@@ -5,7 +5,7 @@ import 'package:path/path.dart' as p;
 import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
-import '../widgets/instruction_banner.dart';
+import '../widgets/capture_tips.dart';
 import 'camera_screen.dart';
 import 'packaging_type_screen.dart';
 import 'record_detail_screen.dart';
@@ -135,13 +135,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         color: Colors.white, size: 18),
                   ),
                   const SizedBox(width: 10),
-                  const Text(
-                    'VerifyDA',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.text,
+                  const Expanded(
+                    child: Text(
+                      'CheckMuna',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.text,
+                      ),
                     ),
+                  ),
+                  // Photo tips moved here from the old always-visible
+                  // banner, so the guidance is one tap away instead of
+                  // permanently occupying the top of the screen.
+                  IconButton(
+                    onPressed: () => showCaptureTips(context),
+                    icon: const Icon(Icons.help_outline),
+                    color: AppColors.muted,
+                    iconSize: 20,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                        minWidth: 36, minHeight: 36),
+                    tooltip: 'Photo tips',
                   ),
                 ],
               ),
@@ -153,12 +169,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                 child: Column(
                   children: [
-                    const InstructionBanner(
-                      text: 'Point your camera at the requested part and '
-                          'take a photo — we\'ll walk you through each '
-                          'step.',
-                    ),
-                    const SizedBox(height: 12),
                     _DashboardCard(
                       icon: Icons.list_alt_outlined,
                       iconColor: AppColors.labelKind,
@@ -170,7 +180,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           'missing info.',
                       onTap: () => _openLabelCamera(context),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 16),
                     _DashboardCard(
                       icon: Icons.inventory_2_outlined,
                       iconColor: AppColors.damageKind,
@@ -183,7 +193,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       onTap: () =>
                           _openPackagingPicker(context, CameraMode.damage),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 16),
                     _DashboardCard(
                       icon: Icons.manage_search,
                       iconColor: AppColors.inspection,
@@ -195,7 +205,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       onTap: () => _openPackagingPicker(
                           context, CameraMode.inspection),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 18),
                     _RecentScansStrip(
                       scans: _recent,
                       loading: _loadingRecent,
@@ -292,6 +302,9 @@ class _DashboardCard extends StatelessWidget {
 /// The recent-scans strip: a section header plus up to three saved records,
 /// newest first. Kept visually lighter than the scan cards above it — this
 /// is a shortcut into Records, not a fourth action.
+///
+/// With no records saved it shows an empty state rather than collapsing, so
+/// a first-run screen explains the blank space instead of just having it.
 class _RecentScansStrip extends StatelessWidget {
   final List<_RecentScan> scans;
   final bool loading;
@@ -305,10 +318,6 @@ class _RecentScansStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Nothing to show and nothing to wait for — collapse entirely rather
-    // than leaving an empty header behind.
-    if (!loading && scans.isEmpty) return const SizedBox.shrink();
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -336,6 +345,8 @@ class _RecentScansStrip extends StatelessWidget {
               ),
             ),
           )
+        else if (scans.isEmpty)
+          const _NoScansYet()
         else
           Container(
             decoration: BoxDecoration(
@@ -441,6 +452,53 @@ class _RecentScanRow extends StatelessWidget {
                 color: AppColors.accentLight, size: 20),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// First-run state for the recent-scans strip. Deliberately says what to do
+/// rather than only that there is nothing here — the space below the scan
+/// cards is otherwise blank with no explanation.
+class _NoScansYet extends StatelessWidget {
+  const _NoScansYet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border, width: 0.6),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.document_scanner_outlined,
+              color: AppColors.accentLight, size: 28),
+          const SizedBox(height: 10),
+          const Text(
+            'No scans yet',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Pick one of the checks above to scan your first product. '
+                'Your results will show up here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: AppColors.muted,
+              height: 1.35,
+            ),
+          ),
+        ],
       ),
     );
   }
