@@ -109,7 +109,7 @@ class _PackagingCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Container(
                     width: 60,
@@ -133,11 +133,8 @@ class _PackagingCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Icon(Icons.chevron_right,
-                        color: AppColors.accentLight, size: 24),
-                  ),
+                  Icon(Icons.chevron_right,
+                      color: AppColors.accentLight, size: 24),
                 ],
               ),
               if (!type.hasModel) ...[

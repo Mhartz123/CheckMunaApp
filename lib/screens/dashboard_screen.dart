@@ -93,10 +93,10 @@ class DashboardScreen extends StatelessWidget {
                       iconColor: AppColors.damageKind,
                       title: 'Damage Detection',
                       description:
-                      'Photograph packaging from multiple angles and '
-                          'we\'ll scan for dents, tears, or scratches using '
-                          'on-device detection — works even without an '
-                          'internet connection.',
+                      'Choose a packaging type — Box, Foil, or Bottle — '
+                          'then photograph it from multiple angles. We\'ll '
+                          'scan for dents or scratches using on-device '
+                          'detection, no internet connection required.',
                       onTap: () =>
                           _openPackagingPicker(context, CameraMode.damage),
                     ),
@@ -106,9 +106,10 @@ class DashboardScreen extends StatelessWidget {
                       iconColor: AppColors.inspection,
                       title: 'Inspection Mode',
                       description:
-                      'Run both checks in one pass — scan the label for '
-                          'compliance and photograph the packaging for '
-                          'damage, then get a single combined result.',
+                      'Run both checks in one scan — verify the label '
+                          'against the FDA registry, then photograph the '
+                          'chosen packaging type for damage. Get one '
+                          'combined result.',
                       onTap: () => _openPackagingPicker(
                           context, CameraMode.inspection),
                     ),
@@ -156,7 +157,7 @@ class _DashboardCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Container(
                     width: 60,
@@ -179,11 +180,8 @@ class _DashboardCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Icon(Icons.chevron_right,
-                        color: AppColors.accentLight, size: 24),
-                  ),
+                  Icon(Icons.chevron_right,
+                      color: AppColors.accentLight, size: 24),
                 ],
               ),
               const SizedBox(height: 12),
