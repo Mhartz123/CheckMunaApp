@@ -75,7 +75,7 @@ class _CaptureTipsSheet extends StatelessWidget {
                 Icon(Icons.tips_and_updates_outlined,
                     color: AppColors.accent, size: 20),
                 const SizedBox(width: 8),
-                const Text(
+                Text(
                   'For the clearest photos',
                   style: TextStyle(
                     fontSize: 16,

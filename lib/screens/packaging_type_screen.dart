@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
 import '../widgets/capture_tips.dart';
+import '../widgets/theme_toggle_button.dart';
 import 'camera_screen.dart';
 
 /// Remembers which packaging type was picked last, so a user working
@@ -63,6 +64,14 @@ class _LastPackagingType {
 /// is in, since this screen otherwise looks identical whether it was
 /// reached from Damage Detection or Inspection Mode. Photo tips live behind
 /// the help icon in the app bar rather than taking up space on the screen.
+///
+/// Reached only via `Navigator.push` from the Homepage — never a
+/// permanently mounted tab — so unlike DashboardScreen/RecordsScreen, a
+/// `const` custom widget here is never at risk of going stale after a theme
+/// toggle: this whole screen is always freshly built after the current
+/// theme is already set, since the toggle itself only lives on the
+/// Homepage. `const _NotSureHelper()` and `const _PackagingGuideSheet()`
+/// below are left const on purpose for that reason.
 class PackagingTypeScreen extends StatefulWidget {
   final CameraMode mode; // CameraMode.damage or CameraMode.inspection
 
@@ -126,7 +135,9 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        title: const Text('What are you checking?',
+        // Was `const Text(...)` — dropped since AppColors.text now varies
+        // with the theme toggle.
+        title: Text('What are you checking?',
             style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -136,6 +147,9 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
         elevation: 0,
         centerTitle: true,
         actions: [
+          // Theme toggle here as well as on the Homepage, so switching does
+          // not require backing out of the flow.
+          ThemeToggleButton(),
           IconButton(
             onPressed: () => showCaptureTips(context),
             icon: const Icon(Icons.help_outline),
@@ -144,7 +158,9 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
             tooltip: 'Photo tips',
           ),
         ],
-        shape: const Border(
+        // Was `const Border(...)` — dropped since AppColors.border now
+        // varies with the theme toggle.
+        shape: Border(
           bottom: BorderSide(color: AppColors.border, width: 0.6),
         ),
       ),
@@ -222,7 +238,9 @@ class _FlowLine extends StatelessWidget {
               children: [
                 Text(
                   text,
-                  style: const TextStyle(
+                  // Was `const TextStyle` — dropped since AppColors.text
+                  // now varies with the theme toggle.
+                  style: TextStyle(
                     fontSize: 12,
                     color: AppColors.text,
                     height: 1.35,
@@ -316,7 +334,9 @@ class _PackagingCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     type.label,
-                    style: const TextStyle(
+                    // Was `const TextStyle` — dropped since AppColors.text
+                    // now varies with the theme toggle.
+                    style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
                       color: AppColors.text,
@@ -341,7 +361,13 @@ class _PackagingCard extends StatelessWidget {
                       background: AppColors.accent.withValues(alpha: 0.10),
                     ),
                   if (!type.hasModel)
-                    const _Pill(
+                  // Was `const _Pill(...)` — this one is a genuine
+                  // compile error once AppColors stops being const, not
+                  // just a staleness risk: `color`/`background` here are
+                  // constructor *arguments*, and every argument to a
+                  // `const` constructor call must itself be a
+                  // compile-time constant.
+                    _Pill(
                       text: 'Coming soon',
                       color: AppColors.muted,
                       background: AppColors.surfaceAlt,
@@ -486,7 +512,9 @@ class _PackagingGuideSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            const Text(
+            // Was `const Text(...)` — dropped since AppColors.text now
+            // varies with the theme toggle.
+            Text(
               'Which one am I holding?',
               style: TextStyle(
                 fontSize: 16,
@@ -518,7 +546,9 @@ class _PackagingGuideSheet extends StatelessWidget {
                       children: [
                         Text(
                           _rules[i].$1.label,
-                          style: const TextStyle(
+                          // Was `const TextStyle` — dropped since
+                          // AppColors.text now varies with the theme toggle.
+                          style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: AppColors.text,

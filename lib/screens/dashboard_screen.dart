@@ -6,6 +6,7 @@ import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
 import '../widgets/capture_tips.dart';
+import '../widgets/theme_toggle_button.dart';
 import 'camera_screen.dart';
 import 'packaging_type_screen.dart';
 import 'record_detail_screen.dart';
@@ -35,6 +36,15 @@ class _RecentScan {
 /// saved records, each tapping through to RecordDetailScreen. It reloads
 /// whenever a pushed route pops back, so a scan saved from the camera shows
 /// up without switching tabs.
+///
+/// The header also carries the light/dark toggle. This screen stays mounted
+/// permanently as one of AppShell's two tabs, so it (and Records, its sibling
+/// tab) are the only screens where a `const` custom widget whose `build()`
+/// reads `AppColors` could go visually stale after a toggle — Flutter skips
+/// rebuilding a child when it sees the exact same canonicalized const widget
+/// instance again. Every other screen is reached via `Navigator.push`, so it
+/// is always freshly built after the current theme is already set, and that
+/// specific risk doesn't apply there.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -116,7 +126,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: 16, vertical: 12),
-              decoration: const BoxDecoration(
+              // Was `const BoxDecoration` — dropped since AppColors.surface
+              // / .border now vary with the theme toggle.
+              decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border(
                   bottom: BorderSide(color: AppColors.border, width: 0.6),
@@ -135,7 +147,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         color: Colors.white, size: 18),
                   ),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  // Was `const Expanded(...)` — dropped since AppColors.text
+                  // now varies with the theme toggle.
+                  Expanded(
                     child: Text(
                       'CheckMuna',
                       style: TextStyle(
@@ -145,6 +159,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
+                  // Light/dark toggle — now shared with the packaging
+                  // picker and Records via widgets/theme_toggle_button.dart
+                  // so all three stay in sync.
+                  ThemeToggleButton(compact: true),
+                  const SizedBox(width: 4),
                   // Photo tips moved here from the old always-visible
                   // banner, so the guidance is one tap away instead of
                   // permanently occupying the top of the screen.
@@ -272,7 +291,9 @@ class _DashboardCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     title,
-                    style: const TextStyle(
+                    // Was `const TextStyle` — dropped since AppColors.text
+                    // now varies with the theme toggle.
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: AppColors.text,
@@ -299,6 +320,7 @@ class _DashboardCard extends StatelessWidget {
     );
   }
 }
+
 /// The recent-scans strip: a section header plus up to three saved records,
 /// newest first. Kept visually lighter than the scan cards above it — this
 /// is a shortcut into Records, not a fourth action.
@@ -322,8 +344,10 @@ class _RecentScansStrip extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 2, bottom: 6),
+        // Was `const Padding(...)` — dropped since AppColors.muted now
+        // varies with the theme toggle.
+        Padding(
+          padding: const EdgeInsets.only(left: 2, bottom: 6),
           child: Text(
             'Recent scans',
             style: TextStyle(
@@ -346,7 +370,15 @@ class _RecentScansStrip extends StatelessWidget {
             ),
           )
         else if (scans.isEmpty)
-          const _NoScansYet()
+        // Was `const _NoScansYet()`. This one matters at runtime, not
+        // just for compilation: DashboardScreen stays permanently mounted
+        // (it's an AppShell tab), so on a theme toggle this widget would
+        // be asked to rebuild — but if it's still the exact same const
+        // instance as before, Flutter treats that as "nothing changed"
+        // and skips calling its build() again, leaving it showing the
+        // old theme's colors. Dropping const makes a fresh instance each
+        // rebuild, so it always re-reads AppColors.
+          _NoScansYet()
         else
           Container(
             decoration: BoxDecoration(
@@ -362,7 +394,9 @@ class _RecentScansStrip extends StatelessWidget {
                     onTap: () => onOpen(scans[i]),
                   ),
                   if (i != scans.length - 1)
-                    const Divider(
+                  // Was `const Divider(...)` — dropped since
+                  // AppColors.border now varies with the theme toggle.
+                    Divider(
                       height: 1,
                       thickness: 0.6,
                       indent: 14,
@@ -427,7 +461,9 @@ class _RecentScanRow extends StatelessWidget {
                     scan.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    // Was `const TextStyle` — dropped since AppColors.text
+                    // now varies with the theme toggle.
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: AppColors.text,
@@ -448,7 +484,9 @@ class _RecentScanRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            const Icon(Icons.chevron_right,
+            // Was `const Icon(...)` — dropped since AppColors.accentLight
+            // now varies with the theme toggle.
+            Icon(Icons.chevron_right,
                 color: AppColors.accentLight, size: 20),
           ],
         ),
@@ -479,7 +517,9 @@ class _NoScansYet extends StatelessWidget {
           Icon(Icons.document_scanner_outlined,
               color: AppColors.accentLight, size: 28),
           const SizedBox(height: 10),
-          const Text(
+          // Was `const Text(...)` — dropped since AppColors.text now varies
+          // with the theme toggle.
+          Text(
             'No scans yet',
             style: TextStyle(
               fontSize: 14,

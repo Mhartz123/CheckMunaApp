@@ -5,6 +5,7 @@ import 'record_detail_screen.dart';
 import '../services/scan_store.dart';
 import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
+import '../widgets/theme_toggle_button.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../screens/report_builder.dart';
@@ -333,7 +334,9 @@ class RecordsScreenState extends State<RecordsScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(
+      // Was `const Center(...)` — dropped since AppColors.accentLight now
+      // varies with the theme toggle.
+      builder: (_) => Center(
         child: CircularProgressIndicator(color: AppColors.accentLight),
       ),
     );
@@ -364,16 +367,25 @@ class RecordsScreenState extends State<RecordsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Records',
+        // Was `const Text(...)` — dropped since AppColors.text now varies
+        // with the theme toggle.
+        title: Text('Records',
             style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.text)),
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
         elevation: 0,
         centerTitle: true,
-        shape: const Border(
+        // Was `const Border(...)` — dropped since AppColors.border now
+        // varies with the theme toggle.
+        shape: Border(
           bottom: BorderSide(color: AppColors.border, width: 0.6),
         ),
         actions: [
+          // Theme toggle here as well as on the Homepage, so switching does
+          // not require leaving the Records tab. Never `const` — this tab
+          // stays mounted, and an identical const instance is what makes
+          // Flutter skip the rebuild that re-reads AppColors.
+          ThemeToggleButton(),
           IconButton(
             icon: const Icon(Icons.picture_as_pdf_outlined),
             tooltip: 'Generate Report',
@@ -484,7 +496,9 @@ class RecordsScreenState extends State<RecordsScreen> {
             const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: TextField(
               onChanged: _onSearchChanged,
-              style: const TextStyle(fontSize: 13, color: AppColors.text),
+              // Was `const TextStyle` — dropped since AppColors.text now
+              // varies with the theme toggle.
+              style: TextStyle(fontSize: 13, color: AppColors.text),
               decoration: InputDecoration(
                 hintText: 'Search by name',
                 hintStyle: TextStyle(color: AppColors.muted, fontSize: 13),
@@ -503,7 +517,9 @@ class RecordsScreenState extends State<RecordsScreen> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppColors.accentLight, width: 1.5),
+                  // Was `const BorderSide` — dropped since
+                  // AppColors.accentLight now varies with the theme toggle.
+                  borderSide: BorderSide(color: AppColors.accentLight, width: 1.5),
                 ),
                 suffixIcon:
                 Icon(Icons.search, color: AppColors.muted),
@@ -576,7 +592,9 @@ class RecordsScreenState extends State<RecordsScreen> {
             Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: 12, vertical: 12),
-              decoration: const BoxDecoration(
+              // Was `const BoxDecoration(...)` — dropped since
+              // AppColors.surface/.border now vary with the theme toggle.
+              decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border(top: BorderSide(color: AppColors.border, width: 0.6)),
               ),
@@ -585,15 +603,23 @@ class RecordsScreenState extends State<RecordsScreen> {
                 children: [
                   TextButton.icon(
                     onPressed: _selectAll,
-                    icon: const Icon(Icons.select_all, color: AppColors.muted),
-                    label: const Text('Select All',
+                    // Was `const Icon(...)` — dropped since AppColors.muted
+                    // now varies with the theme toggle.
+                    icon: Icon(Icons.select_all, color: AppColors.muted),
+                    // Was `const Text(...)` — dropped since AppColors.muted
+                    // now varies with the theme toggle.
+                    label: Text('Select All',
                         style: TextStyle(color: AppColors.muted)),
                   ),
                   TextButton.icon(
                     onPressed: _unselectAll,
-                    icon: const Icon(Icons.check_box_outline_blank,
+                    // Was `const Icon(...)` — dropped since AppColors.muted
+                    // now varies with the theme toggle.
+                    icon: Icon(Icons.check_box_outline_blank,
                         color: AppColors.muted),
-                    label: const Text('Unselect All',
+                    // Was `const Text(...)` — dropped since AppColors.muted
+                    // now varies with the theme toggle.
+                    label: Text('Unselect All',
                         style: TextStyle(color: AppColors.muted)),
                   ),
                   ElevatedButton.icon(
@@ -823,7 +849,10 @@ class _RecordCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             name,
-                            style: const TextStyle(
+                            // Was `const TextStyle` — dropped since
+                            // AppColors.text now varies with the theme
+                            // toggle.
+                            style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
                               color: AppColors.text,
@@ -873,7 +902,9 @@ class _RecordCard extends StatelessWidget {
                     // Date
                     Text(
                       _formatDate(date),
-                      style: const TextStyle(
+                      // Was `const TextStyle` — dropped since
+                      // AppColors.muted now varies with the theme toggle.
+                      style: TextStyle(
                           fontSize: 11.5, color: AppColors.muted),
                     ),
                     const SizedBox(height: 8),
@@ -909,7 +940,10 @@ class _RecordCard extends StatelessWidget {
                             ),
                             child: Text(
                               packagingType.label,
-                              style: const TextStyle(
+                              // Was `const TextStyle` — dropped since
+                              // AppColors.muted now varies with the theme
+                              // toggle.
+                              style: TextStyle(
                                 fontSize: 10.5,
                                 color: AppColors.muted,
                                 fontWeight: FontWeight.w700,
@@ -923,7 +957,9 @@ class _RecordCard extends StatelessWidget {
                       const SizedBox(height: 5),
                       Text(
                         'Detection basis: $keyword',
-                        style: const TextStyle(
+                        // Was `const TextStyle` — dropped since
+                        // AppColors.muted now varies with the theme toggle.
+                        style: TextStyle(
                             fontSize: 11.5, color: AppColors.muted),
                         overflow: TextOverflow.ellipsis,
                       ),

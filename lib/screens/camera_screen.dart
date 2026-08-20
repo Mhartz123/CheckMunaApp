@@ -237,9 +237,113 @@ class _CameraScreenState extends State<CameraScreen>
   /// expiration slot, which is locked to a small tight frame
   /// ([_expirationGuideSize]) so nearby text can't be mistaken for the date.
   Size get _guideSize {
-    if (!_isLabelPhase) return const Size(300, 360);
-    if (_currentLabelSlot == PhotoSlot.expiration) return _expirationGuideSize;
-    return _guidePresets[_guidePresetIndex].size;
+    if (!_isLabelPhase) {
+      if (!_isLandscape) return const Size(300, 360);
+      // In landscape the screen is short and wide, so the portrait box
+      // guide (taller than it is wide) barely fits vertically — use a
+      // wider, shorter rectangle.
+      //
+      // The height is derived from what is actually free rather than being
+      // a fixed constant. A fixed 260 overlapped the thumbnail strip on
+      // shorter landscape viewports, drawing the guide border straight
+      // through the slot tiles; subtracting the strip and the safe-area
+      // insets keeps them apart at any screen size.
+      final band = _landscapeGuideBand;
+      final height = (band.height - 16).clamp(140.0, 300.0);
+      final maxWidth = (band.width - 16).clamp(200.0, 520.0);
+      return Size((height * 1.35).clamp(200.0, maxWidth), height);
+    }
+
+    final labelGuide = _currentLabelSlot == PhotoSlot.expiration
+        ? _expirationGuideSize
+        : _guidePresets[_guidePresetIndex].size;
+    if (!_isLandscape) return labelGuide;
+    // The presets are sized for portrait. Rotated, the Large preset is tall
+    // enough to reach the thumbnail strip, so scale it to fit the free
+    // height. The drawn guide and the OCR crop both read this getter, so
+    // they stay in agreement — a shrunk guide crops exactly what the user
+    // framed.
+    final available = _landscapeGuideBand.height - 16;
+    if (available >= labelGuide.height) return labelGuide;
+    final scale = (available / labelGuide.height).clamp(0.45, 1.0);
+    return Size(labelGuide.width * scale, labelGuide.height * scale);
+  }
+
+  /// True once the rendered camera area (tracked via [_previewSize], set at
+  /// the top of the LayoutBuilder in [build]) is wider than it is tall —
+  /// i.e. the phone is physically rotated to landscape. Drives both the
+  /// guide sizing above and which overlay layout [build] uses.
+  bool get _isLandscape => _previewSize.width > _previewSize.height;
+
+  /// System intrusions — status bar, gesture bar, display cutout — read in
+  /// [build]. The preview is deliberately full-bleed, so the Stack is *not*
+  /// wrapped in a SafeArea; the overlay controls add these insets to their
+  /// own offsets instead.
+  ///
+  /// This matters far more in landscape than portrait. Rotated, the status
+  /// bar and the notch both move to a side edge, which is exactly where the
+  /// left info panel and the exit button sit — which is why the flow badge
+  /// was sliding under the clock and the exit button was landing on the
+  /// battery icons.
+  EdgeInsets _viewPadding = EdgeInsets.zero;
+
+  /// Width of the landscape left-hand info panel.
+  static const double _landscapePanelWidth = 216;
+
+  /// Horizontal room the right-hand control column needs (button plus its
+  /// margin), used to keep the guide and thumbnail strip clear of it.
+  static const double _landscapeControlColumnWidth = 96;
+
+  /// Reserved height for the bottom-left cluster (preset picker + thumbnail
+  /// wrap) in landscape. The top info column stops above this. Sized for the
+  /// worst case: a single-row preset pill row (~44), the gap (10), and a
+  /// one-row 48px thumbnail wrap — a label phase. Damage phases have no
+  /// picker and use less.
+  static const double _landscapeBottomClusterHeight = 120;
+
+
+  /// The rectangle actually available to the framing guide in landscape:
+  /// the preview minus the safe-area insets, the left info panel, the right
+  /// control column, and the bottom thumbnail strip.
+  ///
+  /// The guide is centred in *this*, not in the whole preview. Centring in
+  /// the whole preview is what put the guide's lower edge through the slot
+  /// tiles: the free space is not symmetric, because the strip only eats
+  /// into the bottom. Working from the band also allows a noticeably larger
+  /// guide than shrinking a centred one until it happened to clear.
+  /// Width reserved on the left for the bottom cluster's widest element —
+  /// the horizontal preset pill row, which now extends past the info panel.
+  /// The guide starts to the right of this so the two never overlap even
+  /// though the guide runs the full height.
+  static const double _landscapeLeftReserve = 300;
+
+  Rect get _landscapeGuideBand {
+    final left = _viewPadding.left + _landscapeLeftReserve;
+    final right = _previewSize.width -
+        _landscapeControlColumnWidth -
+        _viewPadding.right;
+    // Leaves room at the top for the declare-missing pill when that step
+    // can show one, so a tall guide's top edge stays clear of it; otherwise
+    // just the normal margin.
+    final top = _viewPadding.top +
+        (_canDeclareMissing && _isLabelPhase ? 64 : 16);
+    // The thumbnails moved into the left panel, so the bottom no longer
+    // needs the reserved strip — the guide can run nearly the full height.
+    final bottom = _previewSize.height - 16 - _viewPadding.bottom;
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  /// Where the framing guide is centred. Portrait keeps the geometric
+  /// centre of the preview; landscape uses the centre of the free band.
+  ///
+  /// The label crop reads this too (see [_takePhoto]), so the cropped
+  /// region always matches the rectangle the user was shown — moving the
+  /// guide without moving the crop would silently crop the wrong area.
+  Offset get _guideCenter {
+    if (!_isLandscape) {
+      return Offset(_previewSize.width / 2, _previewSize.height / 2);
+    }
+    return _landscapeGuideBand.center;
   }
 
   @override
@@ -258,11 +362,7 @@ class _CameraScreenState extends State<CameraScreen>
     ComplianceEngine.warmUp(packagingType: widget.packagingType);
     // Wide packaging is easier to capture tilted, so allow landscape only
     // while this screen is open; every other screen stays portrait-locked.
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    _applyCameraOrientations();
   }
 
   Future<void> _initCamera(int index) async {
@@ -376,8 +476,10 @@ class _CameraScreenState extends State<CameraScreen>
       if (_isLabelPhase) {
         // Isolate the label region: crop to the framing guide so OCR isn't
         // distracted by the surrounding scene.
+        // Same centre the guide was drawn at, so the crop matches exactly
+        // what the user framed in either orientation.
         final guide = Rect.fromCenter(
-          center: Offset(_previewSize.width / 2, _previewSize.height / 2),
+          center: _guideCenter,
           width: _guideSize.width,
           height: _guideSize.height,
         );
@@ -592,13 +694,34 @@ class _CameraScreenState extends State<CameraScreen>
     if (mounted) setState(() => _isProcessing = false);
 
     if (mounted) {
+      // The result screen is portrait-only. The camera allows landscape,
+      // and pushing the result over it would otherwise inherit whatever way
+      // the phone was being held — which is what rendered the result card
+      // sideways and clipped. Force portrait for the result, then restore
+      // the camera's orientation set on the way back so the next capture
+      // can still be shot in landscape.
+      await SystemChrome.setPreferredOrientations(
+          const [DeviceOrientation.portraitUp]);
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ResultScreen(record: record),
         ),
       );
+      _applyCameraOrientations();
       if (mounted) _showSaveSheet(record);
     }
+  }
+
+  /// Orientations allowed while the camera is on screen: portrait plus both
+  /// landscapes, so wide packaging can be captured by turning the phone.
+  /// Pulled out so [_finishAnalysis] can restore it after the portrait-only
+  /// result screen.
+  void _applyCameraOrientations() {
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
   }
 
   /// Mean recognized-line confidence (0..1) across [recognized], or null if
@@ -870,13 +993,11 @@ class _CameraScreenState extends State<CameraScreen>
                             Navigator.of(context).pop();
                             final saved = await _saveRecord(raw, record);
                             if (saved && cameraContext.mounted) {
-                              // Back to the Homepage rather than to the
-                              // packaging chooser: that screen was a step
-                              // on the way in, and returning to it shows a
-                              // stale "Last used" marker for the scan that
-                              // just finished. popUntil also clears the
-                              // camera and chooser in one go, so a finished
-                              // scan can't be reached with Back.
+                              // Back to the Homepage, not the packaging
+                              // chooser this scan came through: returning
+                              // there shows a stale "Last used" marker for
+                              // the scan just finished. popUntil clears the
+                              // camera and chooser together.
                               Navigator.of(cameraContext)
                                   .popUntil((route) => route.isFirst);
                             }
@@ -976,8 +1097,14 @@ class _CameraScreenState extends State<CameraScreen>
       body: LayoutBuilder(
         builder: (context, constraints) {
           // The guide is centered in this space; reuse it as the crop
-          // coordinate system for label photos.
+          // coordinate system for label photos. Also drives _isLandscape,
+          // which both _guideSize and the overlay layout below key off of.
           _previewSize = Size(constraints.maxWidth, constraints.maxHeight);
+          // Read fresh every build: rotating the device moves which edges
+          // the status bar and cutout occupy, and the landscape offsets
+          // below depend on it.
+          _viewPadding = MediaQuery.of(context).padding;
+          final isLandscape = _isLandscape;
 
           return Stack(
             fit: StackFit.expand,
@@ -991,35 +1118,46 @@ class _CameraScreenState extends State<CameraScreen>
                 child: CameraPreview(_controller!),
               ),
 
-              // Framing guide
-              IgnorePointer(
-                child: Center(
-                  child: Container(
-                    width: _guideSize.width,
-                    height: _guideSize.height,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        width: 1.5,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: _currentZoom > _minZoom + 0.05
-                        ? Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
+              // Framing guide. Positioned at the guide's exact centre with a
+              // -50%/-50% translation, so the rectangle's true centre lands
+              // on _guideCenter regardless of its size. (Alignment-based
+              // placement pulls a child toward the preview middle by a
+              // fraction of its own size, which made the guide and the pill
+              // above it centre on different points.) The pill uses the same
+              // method, so the two share a vertical centre line.
+              Positioned(
+                left: _guideCenter.dx,
+                top: _guideCenter.dy,
+                child: FractionalTranslation(
+                  translation: const Offset(-0.5, -0.5),
+                  child: IgnorePointer(
+                    child: Container(
+                      width: _guideSize.width,
+                      height: _guideSize.height,
+                      alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.5),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          width: 1.5,
+                        ),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        '${_currentZoom.toStringAsFixed(1)}x',
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 14),
-                      ),
-                    )
-                        : null,
+                      child: _currentZoom > _minZoom + 0.05
+                          ? Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${_currentZoom.toStringAsFixed(1)}x',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 14),
+                        ),
+                      )
+                          : null,
+                    ),
                   ),
                 ),
               ),
@@ -1035,239 +1173,457 @@ class _CameraScreenState extends State<CameraScreen>
                   ),
                 ),
 
-              // Top step header
-              Positioned(
-                top: 56,
-                left: 20,
-                right: 20,
-                child: Column(
-                  children: [
-                    // Which check this session is running.
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _modeBadgeColor,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        _modeBadgeText,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.6,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'PHOTO ${_slotIndex + 1} OF $_slotCount',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _currentTitle,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _currentHelper,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.8),
-                        fontSize: 12,
-                      ),
-                    ),
-                    // "Not on the box" — lets the user verify a required label
-                    // element is absent, which flags the scan non-compliant.
-                    if (isLabelPhase && !_isProcessing && _canDeclareMissing) ...[
-                      const SizedBox(height: 12),
-                      GestureDetector(
-                        onTap: _isTaking ? null : _declareCurrentMissing,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.45),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.6),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.report_gmailerrorred_outlined,
-                                  color: Colors.white, size: 16),
-                              const SizedBox(width: 6),
-                              Text(
-                                _currentLabelSlot == PhotoSlot.expiration
-                                    ? 'No expiration date on the box'
-                                    : 'No ingredient list on the box',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-
-              // Clear-all shortcut — top-left. Only shown once at least one
-              // photo has been captured, so there's something to discard.
-              if (!_isProcessing &&
-                  (_labelPaths.isNotEmpty || _boxPaths.isNotEmpty))
-                Positioned(
-                  top: 52,
-                  left: 12,
-                  child: GestureDetector(
-                    onTap: _isTaking ? null : _confirmClearAll,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.delete_outline,
-                              color: Colors.white, size: 16),
-                          SizedBox(width: 5),
-                          Text('Clear all',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-              // Exit shortcut — top-right. Pops back to the Homepage.
-              if (!_isProcessing)
-                Positioned(
-                  top: 52,
-                  right: 12,
-                  child: GestureDetector(
-                    onTap: _isTaking ? null : _confirmExit,
-                    child: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.5),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.close,
-                          color: Colors.white, size: 18),
-                    ),
-                  ),
-                ),
-
-              if (_isProcessing)
-                Container(
-                  color: const Color(0xFF2E7D32),
-                  child: Center(
-                    child: _ScanProgressCard(
-                      stage: _scanStage,
-                      stages: _activeStages,
-                    ),
-                  ),
-                ),
-
-              // Framing-box preset selector — label phase only. Sits well
-              // above the thumbnail strip (bottom: 120, ~70px tall) so the
-              // Small/Medium/Large pills don't crowd the slot thumbnails.
-              if (isLabelPhase && !_isProcessing)
-                Positioned(
-                  bottom: 212,
-                  left: 0,
-                  right: 0,
-                  child: Center(child: _buildGuideControl()),
-                ),
-
-              // Thumbnail strip for the current phase
-              Positioned(
-                bottom: 120,
-                left: 0,
-                right: 0,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: isLabelPhase
-                      ? [
-                    for (var i = 0; i < _labelSlots.length; i++)
-                      _SlotThumbnail(
-                        label: _shortTitle(_labelSlots[i].title),
-                        isCurrent: i == _slotIndex,
-                        imagePath: _labelPaths[_labelSlots[i].slot],
-                      ),
-                  ]
-                      : [
-                    for (var i = 0; i < _boxSlots.length; i++)
-                      _SlotThumbnail(
-                        label: _shortTitle(_boxSlots[i].title),
-                        isCurrent: i == _slotIndex,
-                        imagePath: _boxPaths[_boxSlots[i].slot],
-                      ),
-                  ],
-                ),
-              ),
-
-              // Bottom controls — above the gesture layer so buttons work
-              Positioned(
-                bottom: 32,
-                left: 0,
-                right: 0,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _CircleButton(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      icon: Icons.flip_camera_android,
-                      iconColor: Colors.white,
-                      size: 52,
-                      onTap: _isProcessing ? null : _switchCamera,
-                    ),
-                    _CircleButton(
-                      color: Colors.white,
-                      icon: _isTaking ? null : Icons.circle,
-                      iconColor: Colors.white,
-                      size: 72,
-                      onTap: (_isTaking || _isProcessing) ? null : _takePhoto,
-                      isShutter: true,
-                      isTaking: _isTaking,
-                    ),
-                    _CircleButton(
-                      color: Colors.grey.withValues(alpha: 0.6),
-                      icon: _isFlashOn ? Icons.flash_on : Icons.flash_off,
-                      iconColor: Colors.white,
-                      size: 52,
-                      onTap: _isProcessing ? null : _toggleFlash,
-                    ),
-                  ],
-                ),
-              ),
+              // Everything else — header, shortcuts, guide preset picker,
+              // thumbnails, and the shutter/flip/flash controls — is laid
+              // out completely differently depending on orientation, since
+              // portrait has vertical room to spare and landscape doesn't.
+              ...isLandscape
+                  ? _landscapeOverlay(isLabelPhase)
+                  : _portraitOverlay(isLabelPhase),
             ],
           );
         },
       ),
+    );
+  }
+
+  // ── Portrait overlay ──────────────────────────────────────────────────
+  // The original layout: header banner across the top, shutter/flip/flash
+  // in a row along the bottom. Plenty of vertical room, so everything
+  // stacks.
+  List<Widget> _portraitOverlay(bool isLabelPhase) {
+    return [
+      Positioned(
+        top: 56,
+        left: 20,
+        right: 20,
+        child: _headerColumn(isLabelPhase),
+      ),
+
+      // Clear-all shortcut — top-left. Only shown once at least one photo
+      // has been captured, so there's something to discard.
+      if (!_isProcessing &&
+          (_labelPaths.isNotEmpty || _boxPaths.isNotEmpty))
+        Positioned(top: 52, left: 12, child: _clearAllButton()),
+
+      // Exit shortcut — top-right. Pops back to the Homepage.
+      if (!_isProcessing)
+        Positioned(top: 52, right: 12, child: _exitButton()),
+
+      // "No <element> on the box" — horizontally centered on the guide
+      // rectangle and sitting just above its top edge, per step.
+      if (isLabelPhase && !_isProcessing && _canDeclareMissing)
+        _declareMissingPositioned(),
+
+      if (_isProcessing) _processingOverlay(),
+
+      // Framing-box preset selector — label phase only. Sits well above
+      // the thumbnail strip (bottom: 120, ~70px tall) so the
+      // Small/Medium/Large pills don't crowd the slot thumbnails.
+      if (isLabelPhase && !_isProcessing)
+        Positioned(
+          bottom: 212,
+          left: 0,
+          right: 0,
+          child: Center(child: _buildGuideControl()),
+        ),
+
+      // Thumbnail strip for the current phase
+      Positioned(
+        bottom: 120,
+        left: 0,
+        right: 0,
+        child: _thumbnailRow(isLabelPhase),
+      ),
+
+      // Bottom controls — above the gesture layer so buttons work
+      Positioned(
+        bottom: 32,
+        left: 0,
+        right: 0,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [_flipButton(), _shutterButton(), _flashButton()],
+        ),
+      ),
+    ];
+  }
+
+  // ── Landscape overlay ─────────────────────────────────────────────────
+  // Landscape trades vertical room for horizontal: the badge, title, helper,
+  // and clear-all sit in a top-left column; the preset picker and thumbnails
+  // sit in a bottom-left cluster; the declare-missing pill is centered above
+  // the guide; the
+  // shutter/flip/flash controls move into a column centered on the right
+  // edge instead of a bottom row; the thumbnail strip stays a horizontal
+  // row, narrowed to the space between the two side columns instead of
+  // spanning full width. The exit button is the one piece that stays a
+  // simple top corner in both orientations.
+  List<Widget> _landscapeOverlay(bool isLabelPhase) {
+    // Every offset is padded by the system insets. Rotated, the status bar
+    // and cutout sit on a side edge — the same edge as the info panel and
+    // the exit button — so without this the badge slides under the clock
+    // and the exit button lands on the battery icons.
+    final leftInset = _viewPadding.left;
+    final rightInset = _viewPadding.right;
+    final topInset = _viewPadding.top;
+    final bottomInset = _viewPadding.bottom;
+
+    return [
+      // Top-left cluster — clear-all, mode badge, title, helper text, and
+      // the declare-missing pill. Anchored to the TOP and allowed to take
+      // only the height it needs. It is deliberately NOT in the same column
+      // as the preset picker and thumbnails: stacking all of it made the
+      // panel taller than a short landscape screen and forced a scroll.
+      // Splitting top-anchored info from bottom-anchored controls means
+      // neither can push the other off-screen.
+      Positioned(
+        left: 16 + leftInset,
+        top: 16 + topInset,
+        // Stops above the bottom cluster's zone so the two never collide.
+        bottom: _landscapeBottomClusterHeight + 16 + bottomInset,
+        width: _landscapePanelWidth,
+        // No FittedBox: the text renders at one fixed size on every step.
+        // The earlier scale-to-fit is what made each step look different,
+        // since steps carry different amounts of text. Fixed sizing plus a
+        // worst-case-sized bottom reserve keeps it consistent and keeps it
+        // from ever needing to scroll.
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!_isProcessing &&
+                  (_labelPaths.isNotEmpty || _boxPaths.isNotEmpty)) ...[
+                _clearAllButton(),
+                const SizedBox(height: 10),
+              ],
+              _headerColumn(
+                isLabelPhase,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                textAlign: TextAlign.left,
+              ),
+            ],
+          ),
+        ),
+      ),
+
+      // Bottom-left cluster — the guide preset picker and the per-slot
+      // thumbnails, anchored to the BOTTOM corner. Fixed, shallow height so
+      // it can't grow into a scroll, and it sits in the dead space under
+      // the guide's left side rather than over it.
+      if (!_isProcessing)
+        Positioned(
+          left: 16 + leftInset,
+          bottom: 16 + bottomInset,
+          // Bounded on the right only, so the horizontal preset row can run
+          // wider than the info panel into the open space — but never into
+          // the shutter/flip/flash column.
+          right: _landscapeControlColumnWidth + rightInset,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isLabelPhase) ...[
+                  _buildGuideControl(),
+                  const SizedBox(height: 10),
+                ],
+                _thumbnailWrap(isLabelPhase),
+              ],
+            ),
+          ),
+        ),
+
+      // "No <element> on the box" — horizontally centered on the guide
+      // rectangle and sitting just above its top edge, same as portrait.
+      if (isLabelPhase && !_isProcessing && _canDeclareMissing)
+        _declareMissingPositioned(),
+
+      // Exit shortcut — top-right corner in both orientations. The control
+      // column on the right is vertically centered (see below), so this
+      // never collides with it.
+      if (!_isProcessing)
+        Positioned(
+          top: 12 + topInset,
+          right: 16 + rightInset,
+          child: _exitButton(),
+        ),
+
+      if (_isProcessing) _processingOverlay(),
+
+      // Right control column — flip/shutter/flash stacked vertically and
+      // centered along the full height, replacing the portrait bottom row.
+      Positioned(
+        right: 16 + rightInset,
+        top: topInset,
+        bottom: bottomInset,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _flipButton(),
+              const SizedBox(height: 22),
+              _shutterButton(),
+              const SizedBox(height: 22),
+              _flashButton(),
+            ],
+          ),
+        ),
+      ),
+    ];
+  }
+
+  // ── Shared overlay pieces ────────────────────────────────────────────
+  // Built once, arranged differently by each orientation's overlay above.
+
+  /// Mode badge, photo count, title, helper text, and (when relevant) the
+  /// "not on the box" button. [crossAxisAlignment]/[textAlign] let the
+  /// landscape overlay left-align this in a narrow column instead of the
+  /// portrait centered banner.
+  Widget _headerColumn(
+      bool isLabelPhase, {
+        CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment.center,
+        TextAlign textAlign = TextAlign.center,
+      }) {
+    return Column(
+      crossAxisAlignment: crossAxisAlignment,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Which check this session is running.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: _modeBadgeColor,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            _modeBadgeText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.6,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'PHOTO ${_slotIndex + 1} OF $_slotCount',
+          textAlign: textAlign,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.85),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _currentTitle,
+          textAlign: textAlign,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _currentHelper,
+          textAlign: textAlign,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.8),
+            fontSize: 13,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Positions [_declareMissingPill] so its horizontal center aligns with
+  /// the guide rectangle's center, sitting just above the rectangle's top
+  /// edge. Both are derived from [_guideCenter] and [_guideSize], so the
+  /// pill tracks the guide across steps and orientations without a separate
+  /// anchor to keep in sync.
+  ///
+  /// The pill's own width is unknown until layout, so it is centered with a
+  /// FractionalTranslation(-0.5) around the guide's center x rather than by
+  /// computing left/right — that keeps it centered whatever the caption
+  /// length.
+  Widget _declareMissingPositioned() {
+    // Horizontal position tracks the guide rectangle's centre, so the pill
+    // sits directly over whichever rectangle the current step shows.
+    // Vertical position is FIXED near the top of the screen — it does not
+    // follow the guide's top edge — so the pill stays put across steps and
+    // only slides left/right to stay centred on the rectangle.
+    //
+    // Centering is done with an Align across the FULL width rather than a
+    // left offset plus a translation: the pill's own width is unknown until
+    // layout, and the earlier translation-based approach shifted it by half
+    // its measured width, landing it right of the guide's centre. Align maps
+    // the guide's centre x to an alignment value directly, so the result is
+    // exact regardless of caption length.
+    final topY = _viewPadding.top + (_isLandscape ? 16 : 56);
+    return Positioned(
+      left: _guideCenter.dx,
+      top: topY,
+      child: FractionalTranslation(
+        // -0.5 on x only: centre on the guide's x, keep the given top y.
+        // This is the exact method the guide rectangle uses, so the pill's
+        // centre and the rectangle's centre fall on the same vertical line
+        // whatever either one's width.
+        translation: const Offset(-0.5, 0),
+        child: _declareMissingPill(),
+      ),
+    );
+  }
+
+  /// The "No <element> on the box" pill, shown top-center above the guide
+  /// during label phases. Pulled out of the header column and given its own
+  /// centered anchor: inside the column it overflowed the fixed-height left
+  /// panel (the yellow-black stripe on the expiration and ingredient steps),
+  /// and it sat over the preset picker. Centered above the guide, it clears
+  /// every other control.
+  Widget _declareMissingPill() {
+    return GestureDetector(
+      onTap: _isTaking ? null : _declareCurrentMissing,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.6),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.report_gmailerrorred_outlined,
+                color: Colors.white, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              _currentLabelSlot == PhotoSlot.expiration
+                  ? 'No expiration date on the box'
+                  : 'No ingredient list on the box',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _clearAllButton() {
+    return GestureDetector(
+      onTap: _isTaking ? null : _confirmClearAll,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.delete_outline, color: Colors.white, size: 16),
+            SizedBox(width: 5),
+            Text('Clear all',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _exitButton() {
+    return GestureDetector(
+      onTap: _isTaking ? null : _confirmExit,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.close, color: Colors.white, size: 18),
+      ),
+    );
+  }
+
+  Widget _processingOverlay() {
+    return Container(
+      color: const Color(0xFF2E7D32),
+      child: Center(
+        child: _ScanProgressCard(
+          stage: _scanStage,
+          stages: _activeStages,
+        ),
+      ),
+    );
+  }
+
+  Widget _thumbnailRow(bool isLabelPhase) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: isLabelPhase
+          ? [
+        for (var i = 0; i < _labelSlots.length; i++)
+          _SlotThumbnail(
+            label: _shortTitle(_labelSlots[i].title),
+            isCurrent: i == _slotIndex,
+            imagePath: _labelPaths[_labelSlots[i].slot],
+          ),
+      ]
+          : [
+        for (var i = 0; i < _boxSlots.length; i++)
+          _SlotThumbnail(
+            label: _shortTitle(_boxSlots[i].title),
+            isCurrent: i == _slotIndex,
+            imagePath: _boxPaths[_boxSlots[i].slot],
+          ),
+      ],
+    );
+  }
+
+  Widget _flipButton() {
+    return _CircleButton(
+      color: Colors.black.withValues(alpha: 0.6),
+      icon: Icons.flip_camera_android,
+      iconColor: Colors.white,
+      size: 52,
+      onTap: _isProcessing ? null : _switchCamera,
+    );
+  }
+
+  Widget _shutterButton() {
+    return _CircleButton(
+      color: Colors.white,
+      icon: _isTaking ? null : Icons.circle,
+      iconColor: Colors.white,
+      size: 72,
+      onTap: (_isTaking || _isProcessing) ? null : _takePhoto,
+      isShutter: true,
+      isTaking: _isTaking,
+    );
+  }
+
+  Widget _flashButton() {
+    return _CircleButton(
+      color: Colors.grey.withValues(alpha: 0.6),
+      icon: _isFlashOn ? Icons.flash_on : Icons.flash_off,
+      iconColor: Colors.white,
+      size: 52,
+      onTap: _isProcessing ? null : _toggleFlash,
     );
   }
 
@@ -1293,6 +1649,10 @@ class _CameraScreenState extends State<CameraScreen>
       );
     }
 
+    // Single horizontal row in both orientations. It is allowed to be wider
+    // than the left info panel — only the framing guide is used for the
+    // actual capture, so the pills can extend right into the open space
+    // rather than wrapping down and eating vertical room.
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -1305,6 +1665,30 @@ class _CameraScreenState extends State<CameraScreen>
           for (var i = 0; i < _guidePresets.length; i++) _presetPill(i),
         ],
       ),
+    );
+  }
+
+  /// Compact thumbnail block for the landscape left panel: small tiles that
+  /// wrap left-to-right instead of stacking in a tall column. Four tiles at
+  /// full size made the panel overflow into a scroll on short landscape
+  /// heights; a wrap of ~40px tiles fits without one and never reaches the
+  /// guide.
+  Widget _thumbnailWrap(bool isLabelPhase) {
+    final slots = isLabelPhase ? _labelSlots : _boxSlots;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (var i = 0; i < slots.length; i++)
+          _SlotThumbnail(
+            label: null,
+            isCurrent: i == _slotIndex,
+            imagePath: isLabelPhase
+                ? _labelPaths[slots[i].slot]
+                : _boxPaths[slots[i].slot],
+            size: 48,
+          ),
+      ],
     );
   }
 
@@ -1356,14 +1740,22 @@ class _OcrResult {
 // ── Slot thumbnail ─────────────────────────────────────────────────────────────
 
 class _SlotThumbnail extends StatelessWidget {
-  final String label;
+  /// Caption under the tile. Null in the landscape thumbnail wrap, where the
+  /// tiles are unlabelled to stay compact, so the built-in caption would
+  /// only add height.
+  final String? label;
   final bool isCurrent;
   final String? imagePath;
+
+  /// Tile edge length. Defaults to the portrait size; the landscape wrap
+  /// passes a smaller value so four tiles fit without scrolling.
+  final double size;
 
   const _SlotThumbnail({
     required this.label,
     required this.isCurrent,
     required this.imagePath,
+    this.size = 52,
   });
 
   @override
@@ -1375,8 +1767,8 @@ class _SlotThumbnail extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Container(
-              width: 52,
-              height: 52,
+              width: size,
+              height: size,
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(8),
@@ -1395,7 +1787,8 @@ class _SlotThumbnail extends StatelessWidget {
               ),
               child: imagePath == null
                   ? Icon(Icons.image_outlined,
-                  color: Colors.white.withValues(alpha: 0.5), size: 20)
+                  color: Colors.white.withValues(alpha: 0.5),
+                  size: size * 0.4)
                   : null,
             ),
             if (isCaptured)
@@ -1414,11 +1807,13 @@ class _SlotThumbnail extends StatelessWidget {
               ),
           ],
         ),
-        const SizedBox(height: 3),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white, fontSize: 10),
-        ),
+        if (label != null) ...[
+          const SizedBox(height: 3),
+          Text(
+            label!,
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+        ],
       ],
     );
   }
