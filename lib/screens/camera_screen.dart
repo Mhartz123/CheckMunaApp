@@ -5,7 +5,11 @@ import 'package:camera/camera.dart';
 import '../main.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import '../models/scan_record.dart';
+import 'package:image/image.dart' as img;
 import '../services/app_storage.dart';
+import '../services/date_code_parser.dart';
+import '../services/ocr_geometry.dart';
+import '../services/ocr_preprocessor.dart';
 import '../services/compliance_engine.dart';
 import '../services/image_cropper.dart';
 import '../services/scan_store.dart';
@@ -603,16 +607,33 @@ class _CameraScreenState extends State<CameraScreen>
     // Mean OCR confidence on the product-name (front) crop — gates the
     // last-ditch semantic tier in ComplianceEngine.
     double? nameConfidence;
+    DateCode? dateCode;
     try {
       for (final spec in _labelSlots) {
         final path = _labelPaths[spec.slot];
         if (path == null) continue;
-        final inputImage = InputImage.fromFilePath(path);
-        final recognized = await textRecognizer.processImage(inputImage);
-        textBySlot[spec.slot] = recognized.text;
-        if (spec.slot == PhotoSlot.front) {
-          nameConfidence = _meanLineConfidence(recognized);
+        final profile = _profileFor(spec.slot);
+        final recognized =
+            await _recognizeEnhanced(textRecognizer, path, profile);
+        if (recognized == null) continue;
+
+        switch (spec.slot) {
+          case PhotoSlot.front:
+            nameConfidence = _meanLineConfidence(recognized);
+            textBySlot[spec.slot] = _frontTextByProminence(recognized);
+          case PhotoSlot.expiration:
+            // Structure matters here, not just the text: which value belongs
+            // to which label is decided geometrically, and an unreadable code
+            // has to stay distinguishable from an absent one.
+            dateCode = DateCodeParser.parse(
+              recognized,
+              maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
+            );
+            textBySlot[spec.slot] = recognized.text;
+          case PhotoSlot.ingredients:
+            textBySlot[spec.slot] = recognized.text;
         }
+
         if (buffer.isNotEmpty) buffer.write('\n\n');
         buffer.write(recognized.text);
       }
@@ -625,7 +646,80 @@ class _CameraScreenState extends State<CameraScreen>
       textBySlot: textBySlot,
       combinedText: buffer.toString(),
       nameConfidence: nameConfidence,
+      dateCode: dateCode,
     );
+  }
+
+  /// The preprocessing profile tuned for each crop. They must not share one:
+  /// the dot-merge kernel that rescues an inkjet date code fills the counters
+  /// of large brand type.
+  static OcrProfile _profileFor(PhotoSlot slot) => switch (slot) {
+        PhotoSlot.front => OcrProfile.productName,
+        PhotoSlot.expiration => OcrProfile.dateCode,
+        PhotoSlot.ingredients => OcrProfile.ingredients,
+      };
+
+  /// Runs ML Kit over an enhanced copy of the crop at [path].
+  ///
+  /// ML Kit wraps a frozen pretrained model that cannot be trained or tuned,
+  /// so the only lever left is what it gets shown: the crop is upscaled,
+  /// locally contrast-stretched, and — for date codes — dot-merged first, so
+  /// that dot-matrix marking arrives as the continuous strokes the recognizer
+  /// was trained on. If any of that fails the original crop is used instead,
+  /// so a scan never breaks over preprocessing.
+  Future<RecognizedText?> _recognizeEnhanced(
+    TextRecognizer recognizer,
+    String path,
+    OcrProfile profile,
+  ) async {
+    String? enhancedPath;
+    try {
+      final decoded = img.decodeImage(await File(path).readAsBytes());
+      if (decoded != null) {
+        final enhanced = OcrPreprocessor.run(decoded, profile);
+        final dir = await AppStorage.capturesDir();
+        enhancedPath = await OcrPreprocessor.writeTempJpeg(
+          enhanced,
+          directory: dir.path,
+          prefix: 'ocr',
+        );
+      }
+    } catch (e) {
+      debugPrint('OCR preprocessing failed for $path: $e');
+    }
+
+    try {
+      return await recognizer
+          .processImage(InputImage.fromFilePath(enhancedPath ?? path));
+    } catch (e) {
+      debugPrint('OCR error: $e');
+      return null;
+    } finally {
+      if (enhancedPath != null) {
+        try {
+          await File(enhancedPath).delete();
+        } catch (_) {
+          // Temp file cleanup is best-effort; main() clears the folder anyway.
+        }
+      }
+    }
+  }
+
+  /// Front-panel text with the physically largest words moved to the front.
+  ///
+  /// The product name is almost always the biggest thing printed on a pack,
+  /// which is a far stronger prior than reading order — ML Kit routinely
+  /// returns a dosage or a regulatory footnote before the brand. The full text
+  /// still follows, so the existing noise filtering keeps its fallback.
+  String _frontTextByProminence(RecognizedText recognized) {
+    final lines = OcrGeometry.horizontalLines(
+      recognized,
+      maxSkewDegrees: kProductNameMaxSkewDegrees,
+    );
+    final largest = OcrGeometry.largestElements(lines);
+    if (largest.isEmpty) return recognized.text;
+    final headline = largest.map((e) => e.text).join(' ');
+    return '$headline\n${recognized.text}';
   }
 
   List<String> get _capturedBoxPaths => [
@@ -646,6 +740,7 @@ class _CameraScreenState extends State<CameraScreen>
       textBySlot: ocr.textBySlot,
       combinedText: ocr.combinedText,
       ocrConfidence: ocr.nameConfidence,
+      dateCode: ocr.dateCode,
       expirationDeclaredMissing:
       _declaredMissing.contains(PhotoSlot.expiration),
       ingredientsDeclaredMissing:
@@ -686,6 +781,7 @@ class _CameraScreenState extends State<CameraScreen>
       packagingType: widget.packagingType!,
       boxPhotoPaths: _capturedBoxPaths,
       ocrConfidence: ocr.nameConfidence,
+      dateCode: ocr.dateCode,
       expirationDeclaredMissing:
       _declaredMissing.contains(PhotoSlot.expiration),
       ingredientsDeclaredMissing:
@@ -1747,10 +1843,14 @@ class _OcrResult {
   final String combinedText;
   final double? nameConfidence;
 
+  /// Structured read of the expiration crop, or null if that slot was skipped.
+  final DateCode? dateCode;
+
   const _OcrResult({
     required this.textBySlot,
     required this.combinedText,
     required this.nameConfidence,
+    this.dateCode,
   });
 }
 

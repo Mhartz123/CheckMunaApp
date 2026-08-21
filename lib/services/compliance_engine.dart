@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/scan_record.dart';
+import 'date_code_parser.dart';
 import 'fda_dataset_checker.dart';
 import 'label_parser.dart';
 import 'onnx_semantic_matcher.dart';
@@ -87,6 +88,7 @@ class ComplianceEngine {
     required Map<PhotoSlot, String> textBySlot,
     required String combinedText,
     double? ocrConfidence,
+    DateCode? dateCode,
     bool expirationDeclaredMissing = false,
     bool ingredientsDeclaredMissing = false,
     void Function(ScanStage stage)? onStageChange,
@@ -95,6 +97,7 @@ class ComplianceEngine {
       textBySlot: textBySlot,
       combinedText: combinedText,
       ocrConfidence: ocrConfidence,
+      dateCode: dateCode,
       expirationDeclaredMissing: expirationDeclaredMissing,
       ingredientsDeclaredMissing: ingredientsDeclaredMissing,
       onStageChange: onStageChange,
@@ -102,7 +105,10 @@ class ComplianceEngine {
 
     final ComplianceStatus status = s.banned
         ? ComplianceStatus.banned
-        : (s.expired || s.expirationMissing || s.ingredientsMissing)
+        : (s.expired ||
+        s.expirationMissing ||
+        s.expirationUnreadable ||
+        s.ingredientsMissing)
         ? ComplianceStatus.nonCompliant
         : ComplianceStatus.compliant;
 
@@ -112,7 +118,7 @@ class ComplianceEngine {
       matchedKeyword: _matchedLabelKeyword(s),
       reasons: _buildLabelReasons(status: status, s: s),
       productName: s.fields.productName,
-      expiration: s.fields.expiration,
+      expiration: _expirationLabel(s),
       ingredients: s.fields.ingredients,
       extractedText: combinedText,
       damageCheck: const DamageCheckResult.notPerformed(),
@@ -167,6 +173,7 @@ class ComplianceEngine {
     required PackagingType packagingType,
     required List<String> boxPhotoPaths,
     double? ocrConfidence,
+    DateCode? dateCode,
     bool expirationDeclaredMissing = false,
     bool ingredientsDeclaredMissing = false,
     void Function(ScanStage stage)? onStageChange,
@@ -175,6 +182,7 @@ class ComplianceEngine {
       textBySlot: textBySlot,
       combinedText: combinedText,
       ocrConfidence: ocrConfidence,
+      dateCode: dateCode,
       expirationDeclaredMissing: expirationDeclaredMissing,
       ingredientsDeclaredMissing: ingredientsDeclaredMissing,
       onStageChange: onStageChange,
@@ -187,6 +195,7 @@ class ComplianceEngine {
         ? ComplianceStatus.banned
         : (s.expired ||
         s.expirationMissing ||
+        s.expirationUnreadable ||
         s.ingredientsMissing ||
         damageFails)
         ? ComplianceStatus.nonCompliant
@@ -203,6 +212,7 @@ class ComplianceEngine {
     final tags = <String>[
       if (s.expired) 'expired',
       if (s.expirationMissing) 'no expiration date',
+      if (s.expirationUnreadable) 'unreadable expiration date',
       if (s.ingredientsMissing) 'no ingredient list',
       if (damageFails) 'packaging damage',
     ];
@@ -215,7 +225,7 @@ class ComplianceEngine {
           : (tags.isEmpty ? '—' : tags.join(', ')),
       reasons: reasons,
       productName: s.fields.productName,
-      expiration: s.fields.expiration,
+      expiration: _expirationLabel(s),
       ingredients: s.fields.ingredients,
       extractedText: combinedText,
       damageCheck: damage,
@@ -230,6 +240,7 @@ class ComplianceEngine {
     required Map<PhotoSlot, String> textBySlot,
     required String combinedText,
     double? ocrConfidence,
+    DateCode? dateCode,
     required bool expirationDeclaredMissing,
     required bool ingredientsDeclaredMissing,
     void Function(ScanStage stage)? onStageChange,
@@ -261,8 +272,23 @@ class ComplianceEngine {
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final bool expired = fields.expirationDate != null &&
-        today.isAfter(fields.expirationDate!);
+
+    // The structured read wins when the expiration slot produced one: it knows
+    // which printed value is the expiry rather than taking the first date it
+    // finds, and it can say "I could not read this" as its own answer.
+    final DateTime? expiryDate = dateCode != null
+        ? dateCode.expiry
+        : fields.expirationDate;
+    final bool expired = expiryDate != null && today.isAfter(expiryDate);
+
+    // A code that could not be read is NOT the same as a product with no
+    // expiry problem. Letting it fall through as a pass is what inflates the
+    // clean counts, so it fails the scan on its own terms — unless the user
+    // has already verified there is no date printed at all, which is the
+    // separate expirationMissing outcome.
+    final bool expirationUnreadable = dateCode != null &&
+        dateCode.status == DateCodeStatus.unreadable &&
+        !expirationDeclaredMissing;
     // The user can verify on-camera that an element simply isn't printed on the
     // packaging; that declaration alone fails compliance (the label is absent),
     // independent of whatever OCR did or didn't read.
@@ -276,6 +302,8 @@ class ComplianceEngine {
       banned: advisoryMatch != null || semanticMatch != null,
       expired: expired,
       expirationMissing: expirationDeclaredMissing,
+      expirationUnreadable: expirationUnreadable,
+      dateCode: dateCode,
       ingredientsMissing: ingredientsMissing,
     );
   }
@@ -312,6 +340,7 @@ class ComplianceEngine {
     final tags = <String>[
       if (s.expired) 'expired',
       if (s.expirationMissing) 'no expiration date',
+      if (s.expirationUnreadable) 'unreadable expiration date',
       if (s.ingredientsMissing) 'no ingredient list',
     ];
     return tags.isEmpty ? '—' : tags.join(', ');
@@ -320,6 +349,22 @@ class ComplianceEngine {
   /// [omitFallback] skips the "could not confirm compliance" catch-all —
   /// used by [analyzeInspection], which adds its own catch-all after also
   /// considering the damage check.
+  /// What the report shows for the expiration field.
+  ///
+  /// "Unreadable" and "Not detected" are deliberately different strings: the
+  /// first means a date was photographed and could not be parsed, which fails
+  /// the scan, and the second is the old fallback for a slot with no date text
+  /// in it at all.
+  static String _expirationLabel(_LabelSignals s) {
+    final code = s.dateCode;
+    if (code == null) return s.fields.expiration;
+    if (code.status == DateCodeStatus.unreadable) return 'Unreadable';
+    final expiry = code.expiry;
+    if (expiry == null) return s.fields.expiration;
+    final month = expiry.month.toString().padLeft(2, '0');
+    return '${expiry.year}-$month';
+  }
+
   static List<String> _buildLabelReasons({
     required ComplianceStatus status,
     required _LabelSignals s,
@@ -353,6 +398,11 @@ class ComplianceEngine {
       reasons.add('No expiration date is printed on the packaging '
           '(verified by the user).');
     }
+    if (s.expirationUnreadable) {
+      final note = s.dateCode?.note;
+      reasons.add('The expiration date could not be read from the photo, so '
+          'it could not be checked${note == null ? '' : ' — $note'}');
+    }
     if (s.ingredientsMissing) {
       reasons.add('No ingredient list was detected on the label.');
     }
@@ -372,7 +422,13 @@ class _LabelSignals {
   final bool banned;
   final bool expired;
   final bool expirationMissing;
+
+  /// The date code was photographed but could not be read. Distinct from
+  /// [expirationMissing], which means the user verified none is printed.
+  final bool expirationUnreadable;
+
   final bool ingredientsMissing;
+  final DateCode? dateCode;
 
   const _LabelSignals({
     required this.fields,
@@ -381,6 +437,8 @@ class _LabelSignals {
     required this.banned,
     required this.expired,
     required this.expirationMissing,
+    this.expirationUnreadable = false,
     required this.ingredientsMissing,
+    this.dateCode,
   });
 }
