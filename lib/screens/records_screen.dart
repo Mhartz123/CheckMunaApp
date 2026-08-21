@@ -8,7 +8,7 @@ import '../theme/app_colors.dart';
 import '../widgets/theme_toggle_button.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import '../screens/report_builder.dart';
+import '../services/report_builder.dart';
 
 class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});

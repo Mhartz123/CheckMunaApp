@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import '../services/scan_store.dart';
+import 'scan_store.dart';
 
 /// Builds the Product Compliance Summary Report PDF from all saved photos.
 class ReportBuilder {

@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import '../models/scan_record.dart';
+import 'app_storage.dart';
 
 /// Folder-per-record storage.
 ///
-/// `UI_Prototype_Photos/<RecordName>/`
+/// `CheckMuna/records/<RecordName>/`
 ///   front.jpg          ┐
 ///   expiration.jpg     ├ label close-ups (OCR + FDA)
 ///   ingredients.jpg    ┘
@@ -20,14 +20,9 @@ import '../models/scan_record.dart';
 /// cannot be changed, to prevent tampering with data that may already have
 /// been submitted to the centralization dashboard.
 class ScanStore {
-  static const String rootFolderName = 'UI_Prototype_Photos';
-
-  static Future<Directory> rootDir() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final dir = Directory(p.join(appDir.path, rootFolderName));
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir;
-  }
+  /// The folder layout is owned by [AppStorage], which also migrates records
+  /// saved under the old `UI_Prototype_Photos` name.
+  static Future<Directory> rootDir() => AppStorage.recordsDir();
 
   /// Sanitizes a raw user-entered name into a safe folder name.
   static String sanitizeName(String raw) {

@@ -1,4 +1,4 @@
-package com.example.new_recover
+package com.checkmuna.app
 
 import io.flutter.embedding.android.FlutterActivity
 

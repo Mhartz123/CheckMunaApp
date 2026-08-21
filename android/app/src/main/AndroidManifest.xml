@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.CAMERA"/>
@@ -6,9 +7,22 @@
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
+    <!--
+      camera_android_camerax declares these three for video recording. This app
+      only ever calls takePicture() with enableAudio: false, and every file it
+      writes lives in app-private storage, so none of them are used. Left in,
+      they show the user a microphone and a photos-and-media permission the app
+      never exercises, and Play asks you to justify RECORD_AUDIO.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"
+        tools:node="remove"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        tools:node="remove"/>
+
     <application
-        android:label="thesis_tempname"
-        android:usesCleartextTraffic="true"
+        android:label="CheckMuna"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

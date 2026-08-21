@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import '../main.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import '../models/scan_record.dart';
+import '../services/app_storage.dart';
 import '../services/compliance_engine.dart';
 import '../services/image_cropper.dart';
 import '../services/scan_store.dart';
@@ -473,6 +474,22 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final XFile photo = await _controller!.takePicture();
 
+      // takePicture() writes into the plugin's cache directory, which Android
+      // is free to reclaim part-way through a scan. Move the shot into the
+      // app's own captures folder before anything else refers to it; the crop
+      // below then lands beside it, and both are cleared when the flow ends.
+      final stagedPath = await AppStorage.newCapturePath(
+        prefix: _isLabelPhase
+            ? _labelSlots[_slotIndex].slot.name
+            : _boxSlots[_slotIndex].slot.name,
+      );
+      await photo.saveTo(stagedPath);
+      try {
+        await File(photo.path).delete();
+      } catch (_) {
+        // The plugin's own temp copy is best-effort cleanup, not correctness.
+      }
+
       if (_isLabelPhase) {
         // Isolate the label region: crop to the framing guide so OCR isn't
         // distracted by the surrounding scene.
@@ -484,7 +501,7 @@ class _CameraScreenState extends State<CameraScreen>
           height: _guideSize.height,
         );
         final croppedPath = await ImageCropper.cropToGuide(
-          photo.path,
+          stagedPath,
           screenSize: _previewSize,
           guideRect: guide,
         );
@@ -492,7 +509,7 @@ class _CameraScreenState extends State<CameraScreen>
         _labelPaths[slot] = croppedPath;
       } else {
         // Packaging shots are used full-frame for damage detection — no crop.
-        _boxPaths[_boxSlots[_slotIndex].slot] = photo.path;
+        _boxPaths[_boxSlots[_slotIndex].slot] = stagedPath;
       }
 
       await _advanceOrFinish();

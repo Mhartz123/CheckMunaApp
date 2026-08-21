@@ -6,6 +6,7 @@ import 'screens/home_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/records_screen.dart';
 import 'widgets/floating_nav_bar.dart';
+import 'services/app_storage.dart';
 import 'services/theme_controller.dart';
 
 List<CameraDescription> globalCameras = [];
@@ -20,6 +21,10 @@ Future<void> main() async {
   // Load the persisted light/dark preference before the first frame, so a
   // returning user doesn't see a flash of the wrong theme on startup.
   await ThemeController.instance.load();
+  // A scan that was interrupted by a crash or a force-quit leaves its photos
+  // staged. Nothing refers to them once the app restarts, so clear them here
+  // rather than letting them accumulate in app storage.
+  await AppStorage.clearCaptures();
   runApp(const UIPrototypeApp());
 }
 

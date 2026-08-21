@@ -1,0 +1,19 @@
+# Template for android/key.properties — copy to `key.properties` and fill in.
+#
+# key.properties, *.jks and *.keystore are all gitignored. Never commit the
+# real file or the keystore: whoever holds them controls updates to the app.
+#
+# Generate the keystore yourself (this is the only step that touches a
+# password, so do it in your own terminal rather than through any tool):
+#
+#   keytool -genkey -v -keystore %USERPROFILE%\checkmuna-upload.jks \
+#     -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# Then point storeFile at it below, using forward slashes even on Windows.
+# Back the .jks up somewhere durable — if it is lost, the app can never be
+# updated under the same listing again.
+
+storeFile=C:/Users/you/checkmuna-upload.jks
+storePassword=
+keyAlias=upload
+keyPassword=

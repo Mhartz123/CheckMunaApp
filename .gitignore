@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
+
+# Kotlin incremental-build scratch
+**/.kotlin/
+
+# IntelliJ compiler output
+/out/
