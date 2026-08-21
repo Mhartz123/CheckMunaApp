@@ -203,4 +203,73 @@ void main() {
       expect(code.expiry!.month, 3);
     });
   });
+
+  group('alphabetic month codes', () {
+    // ATC Healthcare carton: a spread-out label column beside a value block
+    // crammed tighter and drifting upward, with DDMMMYYYY dates. Nearest
+    // baseline binds "Mfg. Date" to the batch code sitting 10px away.
+    List<TextLine> atcLayout() => <TextLine>[
+          _line('Batch No.:', const Rect.fromLTWH(370, 1082, 200, 36)),
+          _line('Mfg. Date:', const Rect.fromLTWH(370, 1162, 200, 36)),
+          _line('Exp. Date:', const Rect.fromLTWH(370, 1244, 200, 36)),
+          _line('FDA FR No.:', const Rect.fromLTWH(370, 1322, 220, 36)),
+          _line('GS002B26', const Rect.fromLTWH(630, 1174, 210, 32)),
+          _line('04FEB2026', const Rect.fromLTWH(630, 1206, 210, 32)),
+          _line('04FEB2028', const Rect.fromLTWH(630, 1249, 210, 32)),
+          _line('4000009048522', const Rect.fromLTWH(630, 1289, 330, 32)),
+        ];
+
+    test('reads DDMMMYYYY off a drifting value column', () {
+      final code = _parse(atcLayout());
+
+      expect(code.status, DateCodeStatus.parsed);
+      expect(code.manufactured, DateTime(2026, 2, 4));
+      expect(code.expiry, DateTime(2028, 2, 4));
+      expect(code.batch, 'GS002B26');
+    });
+
+    test('the batch code keeps the letters digit normalization would eat', () {
+      // G and B are in the lookalike map; normalizing the batch would give
+      // 65002826.
+      expect(_parse(atcLayout()).batch, 'GS002B26');
+    });
+
+    test('works from the value block alone, with no labels in the crop', () {
+      final code = _parse(<TextLine>[
+        _line('GS002B26', const Rect.fromLTWH(630, 1174, 210, 32)),
+        _line('04FEB2026', const Rect.fromLTWH(630, 1206, 210, 32)),
+        _line('04FEB2028', const Rect.fromLTWH(630, 1249, 210, 32)),
+      ]);
+
+      expect(code.expiry, DateTime(2028, 2, 4));
+      expect(code.manufactured, DateTime(2026, 2, 4));
+    });
+
+    test('accepts the spacing and casing variants packaging actually uses', () {
+      for (final pair in <List<String>>[
+        <String>['MFG 04 FEB 2026', 'EXP 04 FEB 2028'],
+        <String>['MFG 04-FEB-2026', 'EXP 04-FEB-2028'],
+        <String>['Mfg. Date 04Feb2026', 'Exp. Date 04Feb2028'],
+        <String>['MFG 2026-02-04', 'EXP 2028-02-04'],
+      ]) {
+        final code = _parse(_stacked(pair));
+        expect(code.expiry, DateTime(2028, 2, 4), reason: pair.join(' / '));
+        expect(code.manufactured, DateTime(2026, 2, 4), reason: pair.join(' / '));
+      }
+    });
+
+    test('month-and-year only resolves to the ends of the month', () {
+      final code = _parse(_stacked(<String>['MFG FEB2026', 'EXP FEB2028']));
+
+      expect(code.manufactured, DateTime(2026, 2, 1));
+      expect(code.expiry, DateTime(2028, 2, 29));
+    });
+
+    test('a month name is not mistaken for a batch code', () {
+      final code = _parse(_stacked(<String>['EXP 04FEB2028']));
+
+      expect(code.expiry, DateTime(2028, 2, 4));
+      expect(code.batch, isNull);
+    });
+  });
 }

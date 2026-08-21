@@ -50,6 +50,27 @@ const int kMinShelfLifeMonths = 6;
 const int kMaxShelfLifeMonths = 72;
 const int kMaxExpiryYearsAhead = 10;
 
+/// Month abbreviations as printed on packaging.
+///
+/// Alphabetic months are common on Philippine pharmaceutical cartons
+/// (`04FEB2028`) and cannot be read after digit normalization, which would
+/// turn FEB into FE8, AUG into AU6, OCT into 0C7 and DEC into 0EC. They are
+/// matched against the raw text instead.
+const Map<String, int> kMonthAbbreviations = <String, int>{
+  'JAN': 1,
+  'FEB': 2,
+  'MAR': 3,
+  'APR': 4,
+  'MAY': 5,
+  'JUN': 6,
+  'JUL': 7,
+  'AUG': 8,
+  'SEP': 9,
+  'OCT': 10,
+  'NOV': 11,
+  'DEC': 12,
+};
+
 /// Glyphs ML Kit routinely confuses for digits in a date context.
 ///
 /// Applied to date tokens only. A real batch code looks like `B.177T78`, where
@@ -93,6 +114,32 @@ class DateCodeParser {
       RegExp(r'(?<!\d)(0[1-9]|1[0-2])\s*[/\-.]\s*(20\d{2})(?!\d)');
   static final RegExp _monthShortYear =
       RegExp(r'(?<!\d)(0[1-9]|1[0-2])\s*[/\-.]\s*(\d{2})(?!\d)');
+
+  static const String _monthNamePattern =
+      'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
+
+  // Alphabetic-month forms, matched against the raw text before normalization.
+  // The separator is optional because these are usually printed solid, and a
+  // trailing [A-Za-z]* absorbs the long spellings (FEBRUARY, SEPT).
+  static final RegExp _dayMonthNameYear = RegExp(
+      r'(?<![A-Za-z0-9])(\d{1,2})\s*[-/.]?\s*(?:'
+      '$_monthNamePattern'
+      r')[A-Za-z]*\s*[-/.]?\s*(20\d{2})(?!\d)',
+      caseSensitive: false);
+  static final RegExp _monthNameYear = RegExp(
+      r'(?<![A-Za-z0-9])(?:'
+      '$_monthNamePattern'
+      r')[A-Za-z]*\s*[-/.]?\s*(20\d{2})(?!\d)',
+      caseSensitive: false);
+
+  /// ISO order, which some overprinters use: 2028-02-04.
+  static final RegExp _isoDate = RegExp(
+      r'(?<!\d)(20\d{2})\s*[-/.]\s*(0[1-9]|1[0-2])\s*[-/.]\s*'
+      r'(0[1-9]|[12]\d|3[01])(?!\d)');
+
+  /// Pulls the month abbreviation back out of a matched alphabetic date.
+  static final RegExp _monthNameIn =
+      RegExp('($_monthNamePattern)', caseSensitive: false);
 
   /// A batch code: at least four characters of alphanumerics and separators,
   /// carrying at least one digit. Read off the raw text with the label and
@@ -284,10 +331,27 @@ class DateCodeParser {
       }
     }
 
-    // Digit normalization applies to what is left after the labels are
-    // removed, so MFG cannot contribute a stray 6 to the digits beside it.
-    final masked = _mask(raw, claimed);
-    final normalized = _normalizeDigits(masked);
+    // Alphabetic-month and ISO dates come first, and off the raw text: digit
+    // normalization would turn 04FEB2028 into 04FE82028 and destroy the month
+    // before it could ever be matched.
+    for (final pattern in <RegExp>[
+      _dayMonthNameYear,
+      _monthNameYear,
+      _isoDate,
+    ]) {
+      for (final match in pattern.allMatches(_mask(raw, claimed))) {
+        if (_anyClaimed(claimed, match.start, match.end)) continue;
+        final token = _tokenFrom(pattern, match, index, box);
+        if (token == null) continue;
+        tokens.add(token);
+        claim(match.start, match.end);
+      }
+    }
+
+    // Digit normalization then applies to whatever is left, which by now has
+    // both the labels and any alphabetic date removed — so MFG cannot
+    // contribute a stray 6 to the digits beside it.
+    final normalized = _normalizeDigits(_mask(raw, claimed));
 
     for (final pattern in <RegExp>[
       _dayMonthYear,
@@ -349,6 +413,27 @@ class DateCodeParser {
     int lineIndex,
     Rect box,
   ) {
+    if (pattern == _dayMonthNameYear) {
+      final month = _monthOf(match.group(0)!);
+      if (month == null) return null;
+      final day = int.parse(match.group(1)!);
+      final year = int.parse(match.group(2)!);
+      if (day > _daysInMonth(year, month)) return null;
+      return _DateToken(year, month, day, lineIndex, match.start, box);
+    }
+    if (pattern == _monthNameYear) {
+      final month = _monthOf(match.group(0)!);
+      if (month == null) return null;
+      return _DateToken(
+          int.parse(match.group(1)!), month, null, lineIndex, match.start, box);
+    }
+    if (pattern == _isoDate) {
+      final year = int.parse(match.group(1)!);
+      final month = int.parse(match.group(2)!);
+      final day = int.parse(match.group(3)!);
+      if (day > _daysInMonth(year, month)) return null;
+      return _DateToken(year, month, day, lineIndex, match.start, box);
+    }
     if (pattern == _dayMonthYear) {
       final day = int.parse(match.group(1)!);
       final month = int.parse(match.group(2)!);
@@ -363,6 +448,13 @@ class DateCodeParser {
     // MM/YY, expanded into the 2000s.
     return _DateToken(2000 + int.parse(match.group(2)!),
         int.parse(match.group(1)!), null, lineIndex, match.start, box);
+  }
+
+  /// The month number for the abbreviation inside [text], or null.
+  static int? _monthOf(String text) {
+    final match = _monthNameIn.firstMatch(text);
+    if (match == null) return null;
+    return kMonthAbbreviations[match.group(1)!.toUpperCase()];
   }
 
   static int _daysInMonth(int year, int month) =>
@@ -470,7 +562,12 @@ class DateCodeParser {
         best = candidate;
       }
     }
-    return best?.text;
+    // On a label-column layout the value block can sit well over a line height
+    // away from the label it belongs to, which is the same drift the date zip
+    // exists to survive. Falling back to reading order keeps the batch rather
+    // than dropping it, since a batch code has no structure to validate and
+    // reporting the wrong one is no worse than reporting none.
+    return (best ?? candidates.first).text;
   }
 }
 
