@@ -14,6 +14,7 @@ import '../services/compliance_engine.dart';
 import '../services/image_cropper.dart';
 import '../services/scan_store.dart';
 import '../services/report_service.dart';
+import '../theme/app_colors.dart';
 import '../widgets/capture_tips.dart';
 import 'result_screen.dart';
 
@@ -813,8 +814,10 @@ class _CameraScreenState extends State<CameraScreen>
       context: context,
       isScrollControlled: true,
       isDismissible: false,
+
+      backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
         bool isTaken = false;
@@ -830,103 +833,138 @@ class _CameraScreenState extends State<CameraScreen>
               });
             }
 
+            final Color fieldBorder =
+            isTaken ? const Color(0xFFE57373) : AppColors.border;
+            final Color fieldFocus =
+            isTaken ? const Color(0xFFE57373) : AppColors.accent;
+
+            OutlineInputBorder border(Color color, double width) =>
+                OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: color, width: width),
+                );
+
             return Padding(
               padding: EdgeInsets.only(
                 left: 20,
                 right: 20,
-                top: 20,
+                top: 10,
                 bottom: MediaQuery.of(context).viewInsets.bottom + 20,
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFD4A847),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      'User Instruction - Save Record',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14),
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppColors.border,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 18),
+
+                  Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: AppColors.accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.save_outlined,
+                            color: AppColors.accent, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('Save record',
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.text,
+                                )),
+                            const SizedBox(height: 2),
+                            Text('Name this scan to file it in Records',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.muted,
+                                )),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+
+                  Text('RECORD NAME',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                        color: AppColors.muted,
+                      )),
+                  const SizedBox(height: 8),
                   TextField(
                     controller: nameController,
                     autofocus: true,
                     onChanged: onChanged,
+                    style: TextStyle(fontSize: 15, color: AppColors.text),
                     decoration: InputDecoration(
-                      hintText: 'Record name',
+                      hintText: 'Loaf_of_bread',
+                      hintStyle: TextStyle(
+                          color: AppColors.muted.withValues(alpha: 0.7)),
+                      filled: true,
+                      fillColor: AppColors.bg,
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: isTaken
-                              ? const Color(0xFFE57373)
-                              : Colors.grey.shade400,
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: isTaken
-                              ? const Color(0xFFE57373)
-                              : const Color(0xFF4CAF50),
-                          width: 2,
-                        ),
-                      ),
+                          horizontal: 14, vertical: 14),
+                      enabledBorder: border(fieldBorder, 1),
+                      focusedBorder: border(fieldFocus, 1.8),
                       errorText: isTaken
                           ? 'This name is already taken. Please choose another.'
                           : null,
                       errorStyle: const TextStyle(
                           color: Color(0xFFE57373), fontSize: 11),
-                      errorBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide:
-                        const BorderSide(color: Color(0xFFE57373)),
-                      ),
-                      focusedErrorBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                            color: Color(0xFFE57373), width: 2),
-                      ),
+                      errorBorder: border(const Color(0xFFE57373), 1),
+                      focusedErrorBorder:
+                      border(const Color(0xFFE57373), 1.8),
                     ),
                   ),
                   const SizedBox(height: 10),
-                  const Text(
-                    '*Please input a name for the record you just scanned.',
-                    style: TextStyle(fontSize: 12, color: Colors.black54),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    '*Note: once saved, this name cannot be changed.',
-                    style: TextStyle(fontSize: 12, color: Colors.black54),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text('Example :',
-                      style:
-                      TextStyle(fontSize: 12, color: Colors.black54)),
-                  const Text(
-                    'Loaf_of_bread',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.black54,
-                        fontWeight: FontWeight.w600),
+
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline,
+                          size: 14, color: AppColors.muted),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Once saved, this name can\'t be changed. Use '
+                              'letters, numbers, and underscores.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.4,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 20),
+
                   Row(
                     children: [
                       Expanded(
-                        child: ElevatedButton(
+                        child: OutlinedButton(
                           onPressed: () {
                             Navigator.of(context).pop();
                             _discardCapturedPhotos();
@@ -934,18 +972,19 @@ class _CameraScreenState extends State<CameraScreen>
                               Navigator.of(cameraContext).pop();
                             }
                           },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFE57373),
-                            foregroundColor: Colors.white,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.text,
+                            backgroundColor: AppColors.surface,
+                            side: BorderSide(color: AppColors.border),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: BorderRadius.circular(12)),
                             padding:
-                            const EdgeInsets.symmetric(vertical: 14),
+                            const EdgeInsets.symmetric(vertical: 15),
                           ),
                           child: const Text('Cancel',
                               style: TextStyle(
                                   fontSize: 15,
-                                  fontWeight: FontWeight.bold)),
+                                  fontWeight: FontWeight.w600)),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -964,15 +1003,18 @@ class _CameraScreenState extends State<CameraScreen>
                             }
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF4CAF50),
+                            backgroundColor: AppColors.accent,
                             foregroundColor: Colors.white,
-                            disabledBackgroundColor: Colors.grey.shade300,
+
+                            disabledBackgroundColor: AppColors.surfaceAlt,
+                            disabledForegroundColor: AppColors.muted,
+                            elevation: 0,
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: BorderRadius.circular(12)),
                             padding:
-                            const EdgeInsets.symmetric(vertical: 14),
+                            const EdgeInsets.symmetric(vertical: 15),
                           ),
-                          child: const Text('Save',
+                          child: const Text('Save record',
                               style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.bold)),

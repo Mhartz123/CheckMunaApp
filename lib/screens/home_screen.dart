@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
 
 class HomeScreen extends StatelessWidget {
   final VoidCallback onGetStarted;
@@ -8,16 +9,16 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.bg,
       body: SafeArea(
         child: Column(
           children: [
-            // ── Header ──────────────────────────────────────────────────────
+
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(24, 32, 24, 28),
-              decoration: const BoxDecoration(
-                color: Color(0xFF4CAF50),
+              decoration: BoxDecoration(
+                color: AppColors.accent,
                 borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
               ),
               child: Column(
@@ -32,8 +33,8 @@ class HomeScreen extends StatelessWidget {
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Icon(Icons.qr_code_scanner,
-                            color: Color(0xFF4CAF50), size: 28),
+                        child: Icon(Icons.qr_code_scanner,
+                            color: AppColors.accent, size: 28),
                       ),
                       const SizedBox(width: 12),
                       const Text(
@@ -58,7 +59,7 @@ class HomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Learn how to use the app before getting started.',
+                    'A quick tour of the three checks and how a scan works.',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.88),
                       fontSize: 14,
@@ -68,59 +69,99 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
 
-            // ── How it works ────────────────────────────────────────────────
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'How it works',
                       style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF1A1A1A),
+                        color: AppColors.text,
                       ),
                     ),
                     const SizedBox(height: 16),
                     _Step(
                       number: '1',
-                      icon: Icons.camera_alt_outlined,
-                      title: 'Take a photo',
+                      icon: Icons.checklist_rtl,
+                      title: 'Pick a check',
                       description:
-                      'Point your camera at a food supplement label and tap the shutter button to capture it.',
+                      'Check Labels reads the printed label and verifies it against the FDA registry. Damage Detection photographs the packaging and looks for damage. Inspection Mode runs both and gives one combined result.',
                     ),
                     _Step(
                       number: '2',
-                      icon: Icons.drive_file_rename_outline,
-                      title: 'Name your scan',
+                      icon: Icons.inventory_2_outlined,
+                      title: 'Say what you are holding',
                       description:
-                      'After taking the photo, give it a unique name so you can find it easily in your records later.',
+                      'Damage Detection and Inspection Mode ask for the packaging type first — Box, Foil, or Bottle — so the right check runs. Check Labels goes straight to the camera.',
                     ),
                     _Step(
                       number: '3',
-                      icon: Icons.fact_check_outlined,
-                      title: 'Check compliance',
+                      icon: Icons.camera_alt_outlined,
+                      title: 'Capture each step',
                       description:
-                      'Open a record and tap the compliance check. The app scans the label text and tells you if the product is Compliant, Non-Compliant, or Banned.',
+                      'The camera walks you through the shots one at a time: three for a label check (product name, expiration date, ingredient list), four sides for a packaging check. Fit the target inside the on-screen frame before tapping the shutter — only what is inside the frame is read.',
                     ),
                     _Step(
                       number: '4',
-                      icon: Icons.folder_outlined,
-                      title: 'Manage your records',
+                      icon: Icons.fact_check_outlined,
+                      title: 'Read the result',
                       description:
-                      'View, sort, rename, or delete your saved scans any time from the Records tab.',
+                      'After the last shot the app analyses on its own — no button to press. It shows Compliant, Non-Compliant, or Banned, with the reasons behind the verdict.',
+                    ),
+                    _Step(
+                      number: '5',
+                      icon: Icons.folder_outlined,
+                      title: 'Name and save',
+                      description:
+                      'Give the scan a name so you can find it later. Saved scans, with their photos, live in the Records tab — view, rename, or delete them any time.',
                     ),
                     const SizedBox(height: 24),
 
-                    // ── Compliance legend ──────────────────────────────────
-                    const Text(
+                    Text(
+                      'The two buttons in the camera',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'They look similar and sit close together, but only one of them changes your result.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.muted,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _ButtonNote(
+                      icon: Icons.info_outline,
+                      title: 'Photo tips (i)',
+                      caption: 'Top of the camera. Help only.',
+                      description:
+                      'Opens advice on lighting, distance, and glare. It changes nothing about the scan — close it and carry on shooting.',
+                    ),
+                    _ButtonNote(
+                      icon: Icons.report_gmailerrorred_outlined,
+                      title: 'No expiration date / ingredient list on the box',
+                      caption:
+                      'Under the step text, on those two steps only. Changes the result.',
+                      description:
+                      'Tap this only when the packaging genuinely does not print that element. It skips the shot and records the element as missing, which counts against the product — a missing expiration date or ingredient list makes the scan Non-Compliant. If the text is there but hard to photograph, keep trying instead: move closer, change the frame size, or improve the light.',
+                    ),
+                    const SizedBox(height: 24),
+
+                    Text(
                       'Compliance indicators',
                       style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF1A1A1A),
+                        color: AppColors.text,
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -144,39 +185,39 @@ class HomeScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 24),
 
-                    // ── FDA Hotline ───────────────────────────────────────
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF5F5F5),
+                        color: AppColors.surfaceAlt,
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFE0E0E0)),
+                        border: Border.all(color: AppColors.border),
                       ),
                       child: Row(
                         children: [
                           Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF4CAF50).withValues(alpha: 0.12),
+                              color: AppColors.accent.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.phone_outlined,
-                                color: Color(0xFF4CAF50), size: 22),
+                            child: Icon(Icons.phone_outlined,
+                                color: AppColors.accent, size: 22),
                           ),
                           const SizedBox(width: 14),
-                          const Column(
+
+                          Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text('FDA Philippines Hotline',
                                   style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
-                                      color: Color(0xFF1A1A1A))),
-                              SizedBox(height: 2),
+                                      color: AppColors.text)),
+                              const SizedBox(height: 2),
                               Text('(02) 8807-0751',
                                   style: TextStyle(
-                                      fontSize: 13, color: Color(0xFF555555))),
+                                      fontSize: 13, color: AppColors.muted)),
                             ],
                           ),
                         ],
@@ -187,7 +228,6 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
 
-            // ── Get Started button ───────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
               child: SizedBox(
@@ -195,7 +235,7 @@ class HomeScreen extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: onGetStarted,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF4CAF50),
+                    backgroundColor: AppColors.accent,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -215,8 +255,6 @@ class HomeScreen extends StatelessWidget {
     );
   }
 }
-
-// ── Step widget ───────────────────────────────────────────────────────────────
 
 class _Step extends StatelessWidget {
   final String number;
@@ -238,12 +276,12 @@ class _Step extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Step number circle
+
           Container(
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: const Color(0xFF4CAF50),
+              color: AppColors.accent,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Center(
@@ -262,23 +300,23 @@ class _Step extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFFF9F9F9),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFEEEEEE)),
+                border: Border.all(color: AppColors.border),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      Icon(icon, size: 18, color: const Color(0xFF4CAF50)),
+                      Icon(icon, size: 18, color: AppColors.accent),
                       const SizedBox(width: 8),
                       Text(
                         title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF1A1A1A),
+                          color: AppColors.text,
                         ),
                       ),
                     ],
@@ -286,9 +324,9 @@ class _Step extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     description,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
-                      color: Color(0xFF666666),
+                      color: AppColors.muted,
                       height: 1.5,
                     ),
                   ),
@@ -302,7 +340,89 @@ class _Step extends StatelessWidget {
   }
 }
 
-// ── Compliance legend item ────────────────────────────────────────────────────
+class _ButtonNote extends StatelessWidget {
+  final IconData icon;
+  final String title;
+
+  final String caption;
+  final String description;
+
+  const _ButtonNote({
+    required this.icon,
+    required this.title,
+    required this.caption,
+    required this.description,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Icon(icon, size: 18, color: AppColors.accent),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        caption,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.accent,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              description,
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.muted,
+                height: 1.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _ComplianceLegendItem extends StatelessWidget {
   final Color color;
@@ -343,9 +463,9 @@ class _ComplianceLegendItem extends StatelessWidget {
                         color: color)),
                 const SizedBox(height: 2),
                 Text(description,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFF666666),
+                        color: AppColors.muted,
                         height: 1.5)),
               ],
             ),

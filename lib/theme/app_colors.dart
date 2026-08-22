@@ -1,21 +1,14 @@
 import 'package:flutter/material.dart';
 import '../services/theme_controller.dart';
 
-/// Centralized color palette for the soft-green clinical theme — now in a
-/// light and a dark variant.
-///
-/// Every field below is a `static Color get`, not a `static const Color`.
-/// Call sites don't change at all (`AppColors.text` reads exactly like
-/// before); what changes is that nothing referencing these can be `const`
-/// anymore, since the value can change at runtime when the theme toggles.
-/// Any stray `const` wrapping a widget that touches `AppColors.*` needs to
-/// go — the compiler will point out anywhere that was missed.
 class AppColors {
   AppColors._();
 
   static bool get _dark => ThemeController.instance.isDark;
 
   static Color get bg => _dark ? _Dark.bg : _Light.bg;
+
+  static Color bgFor({required bool dark}) => dark ? _Dark.bg : _Light.bg;
   static Color get surface => _dark ? _Dark.surface : _Light.surface;
   static Color get surfaceAlt => _dark ? _Dark.surfaceAlt : _Light.surfaceAlt;
   static Color get border => _dark ? _Dark.border : _Light.border;
@@ -27,7 +20,6 @@ class AppColors {
   static Color get text => _dark ? _Dark.text : _Light.text;
   static Color get muted => _dark ? _Dark.muted : _Light.muted;
 
-  // Compliance pill colors
   static Color get compliantBg => _dark ? _Dark.compliantBg : _Light.compliantBg;
   static Color get compliantText =>
       _dark ? _Dark.compliantText : _Light.compliantText;
@@ -40,17 +32,13 @@ class AppColors {
   static Color get bannedBg => _dark ? _Dark.bannedBg : _Light.bannedBg;
   static Color get bannedText => _dark ? _Dark.bannedText : _Light.bannedText;
 
-  // Scan-kind accents (Check Label / Check Damage / Inspection Mode)
   static Color get labelKind => accentLight;
   static Color get damageKind => _dark ? _Dark.damageKind : _Light.damageKind;
   static Color get inspection => _dark ? _Dark.inspection : _Light.inspection;
 
-  // Camera screen stays dark regardless of the app theme — genuinely
-  // unconditional, so this one stays a plain const.
   static const Color cameraBg = Color(0xFF111111);
 }
 
-/// Original light palette — unchanged from before theming was added.
 class _Light {
   static const bg = Color(0xFFF0F7F2);
   static const surface = Color(0xFFFFFFFF);
@@ -76,10 +64,6 @@ class _Light {
   static const inspection = Color(0xFF8E24AA);
 }
 
-/// Dark counterpart — same soft-green identity, re-tuned for contrast on a
-/// near-black background: surfaces step up in lightness instead of down,
-/// and accent/status colors shift toward their lighter Material tones so
-/// they stay legible instead of looking muddy.
 class _Dark {
   static const bg = Color(0xFF10160F);
   static const surface = Color(0xFF1A231A);
