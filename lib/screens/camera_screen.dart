@@ -14,24 +14,13 @@ import '../services/compliance_engine.dart';
 import '../services/image_cropper.dart';
 import '../services/scan_store.dart';
 import '../services/report_service.dart';
+import '../widgets/capture_tips.dart';
 import 'result_screen.dart';
 
-/// Which independent scan this camera session runs. Label checking and
-/// box/damage checking are separate flows; Inspection Mode runs both in one
-/// session (label slots, then packaging slots) and produces a single
-/// combined record. The user picks one on the Homepage before the camera
-/// opens.
 enum CameraMode { label, damage, inspection }
 
-/// Which slot group is currently being captured. Fixed for [CameraMode.label]
-/// (always [label]) and [CameraMode.damage] (always [box]); for
-/// [CameraMode.inspection] the session starts at [label] and advances to
-/// [box] once all label slots are captured.
 enum _CapturePhase { label, box }
 
-/// UI-facing scan progress. OCR happens in this screen before
-/// ComplianceEngine's analyze methods are ever called, so it gets its own
-/// leading stage ahead of [ScanStage].
 enum _ScanUiStage {
   extractingText,
   matchingRegistry,
@@ -39,10 +28,8 @@ enum _ScanUiStage {
   checkingDamage,
 }
 
-/// One label-capture step.
 typedef _LabelSpec = ({PhotoSlot slot, String title, String helper});
 
-/// One packaging-capture step.
 typedef _BoxSpec = ({BoxSlot slot, String title, String helper});
 
 const List<_LabelSpec> _labelSlots = [
@@ -63,9 +50,6 @@ const List<_LabelSpec> _labelSlots = [
   ),
 ];
 
-/// Selectable framing-box presets for the label close-ups. Users pick the one
-/// that best isolates the target text, so a logo that's too big or too long
-/// doesn't pull in surrounding detail that confuses OCR.
 typedef _GuidePreset = ({String label, Size size});
 
 const List<_GuidePreset> _guidePresets = [
@@ -74,17 +58,19 @@ const List<_GuidePreset> _guidePresets = [
   (label: 'Large', size: Size(310, 230)),
 ];
 
-/// The expiration date is small and must not capture nearby text, so its
-/// framing box is fixed tight regardless of the selected preset.
 const Size _expirationGuideSize = Size(210, 100);
+
+const Size _damageGuideSize = Size(300, 360);
+const Size _damageGuideSizeLandscape = Size(360, 260);
+
+const Color _camAccent = Color(0xFF2FD79B);
+const Color _camOnAccent = Color(0xFF04261B);
+const Color _camControlBg = Color(0x8C0E1512);
+const Color _camTrackBg = Color(0xA60E1512);
 
 class CameraScreen extends StatefulWidget {
   final CameraMode mode;
 
-  /// Which packaging type the damage step should run against — required for
-  /// [CameraMode.damage] and [CameraMode.inspection] (chosen on
-  /// PackagingTypeScreen before this screen opens); unused for
-  /// [CameraMode.label].
   final PackagingType? packagingType;
 
   const CameraScreen({super.key, required this.mode, this.packagingType})
@@ -107,41 +93,27 @@ class _CameraScreenState extends State<CameraScreen>
   bool _isFlashOn = false;
   int _cameraIndex = 0;
 
-  // Zoom
   double _currentZoom = 1.0;
   double _baseZoom = 1.0;
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
 
-  // Focus
   Offset? _focusPoint;
 
-  // ── Sequential capture state ────────────────────────────────────────────
   late _CapturePhase _phase;
   int _slotIndex = 0;
 
-  /// Index into [_guidePresets] for the label framing box. Defaults to Medium.
   int _guidePresetIndex = 1;
 
   final Map<PhotoSlot, String> _labelPaths = {};
   final Map<BoxSlot, String> _boxPaths = {};
 
-  /// Label slots the user has verified are physically absent from the packaging
-  /// (via the "not on the box" button). A declared-missing element flags the
-  /// scan non-compliant — see ComplianceEngine's label checks.
   final Set<PhotoSlot> _declaredMissing = {};
 
-  /// Rendered size of the camera area, captured in [build] via LayoutBuilder.
-  /// The framing guide is centered in this space, so it's also the coordinate
-  /// system used to crop label photos to the guide.
   Size _previewSize = Size.zero;
 
   bool get _isLabelPhase => _phase == _CapturePhase.label;
 
-  /// The four packaging-capture steps, titled for whichever [PackagingType]
-  /// was chosen (Box / Foil / Bottle). The capture shape (front/side/side/
-  /// back) is shared across all packaging types — only the label text and
-  /// which detector processes the photos afterward changes.
   List<_BoxSpec> get _boxSlots {
     final typeLabel = (widget.packagingType ?? PackagingType.box).label;
     final lower = typeLabel.toLowerCase();
@@ -179,17 +151,13 @@ class _CameraScreenState extends State<CameraScreen>
       ? _labelSlots[_slotIndex].helper
       : _boxSlots[_slotIndex].helper;
 
-  /// The label slot currently being captured, or null during a box phase.
   PhotoSlot? get _currentLabelSlot =>
       _isLabelPhase ? _labelSlots[_slotIndex].slot : null;
 
-  /// Whether the current slot is one the user can declare absent from the
-  /// packaging (expiration date or ingredient list).
   bool get _canDeclareMissing =>
       _currentLabelSlot == PhotoSlot.expiration ||
           _currentLabelSlot == PhotoSlot.ingredients;
 
-  /// Which progress stages apply to the whole session, in display order.
   List<_ScanUiStage> get _activeStages {
     switch (widget.mode) {
       case CameraMode.label:
@@ -210,7 +178,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Badge text describing what this camera session is doing right now.
   String get _modeBadgeText {
     final typeLabel = widget.packagingType?.label.toUpperCase();
     switch (widget.mode) {
@@ -228,145 +195,93 @@ class _CameraScreenState extends State<CameraScreen>
   Color get _modeBadgeColor {
     switch (widget.mode) {
       case CameraMode.label:
-        return const Color(0xFF4CAF50);
+        return _camAccent;
       case CameraMode.damage:
-        return const Color(0xFF1E88E5);
+        return const Color(0xFF4FC3F7);
       case CameraMode.inspection:
-        return const Color(0xFF8E24AA);
+        return const Color(0xFFCE93D8);
     }
   }
 
-  /// Framing-guide dimensions. Packaging shots use a fixed upright rectangle.
-  /// Label close-ups use the user-selected [_guidePresets] entry so
-  /// oversized/long logos don't drag in surrounding text — except the
-  /// expiration slot, which is locked to a small tight frame
-  /// ([_expirationGuideSize]) so nearby text can't be mistaken for the date.
   Size get _guideSize {
     if (!_isLabelPhase) {
-      if (!_isLandscape) return const Size(300, 360);
-      // In landscape the screen is short and wide, so the portrait box
-      // guide (taller than it is wide) barely fits vertically — use a
-      // wider, shorter rectangle.
-      //
-      // The height is derived from what is actually free rather than being
-      // a fixed constant. A fixed 260 overlapped the thumbnail strip on
-      // shorter landscape viewports, drawing the guide border straight
-      // through the slot tiles; subtracting the strip and the safe-area
-      // insets keeps them apart at any screen size.
-      final band = _landscapeGuideBand;
-      final height = (band.height - 16).clamp(140.0, 300.0);
-      final maxWidth = (band.width - 16).clamp(200.0, 520.0);
-      return Size((height * 1.35).clamp(200.0, maxWidth), height);
+      return _isLandscape ? _damageGuideSizeLandscape : _damageGuideSize;
     }
-
-    final labelGuide = _currentLabelSlot == PhotoSlot.expiration
+    return _currentLabelSlot == PhotoSlot.expiration
         ? _expirationGuideSize
         : _guidePresets[_guidePresetIndex].size;
-    if (!_isLandscape) return labelGuide;
-    // The presets are sized for portrait. Rotated, the Large preset is tall
-    // enough to reach the thumbnail strip, so scale it to fit the free
-    // height. The drawn guide and the OCR crop both read this getter, so
-    // they stay in agreement — a shrunk guide crops exactly what the user
-    // framed.
-    final available = _landscapeGuideBand.height - 16;
-    if (available >= labelGuide.height) return labelGuide;
-    final scale = (available / labelGuide.height).clamp(0.45, 1.0);
-    return Size(labelGuide.width * scale, labelGuide.height * scale);
   }
 
-  /// True once the rendered camera area (tracked via [_previewSize], set at
-  /// the top of the LayoutBuilder in [build]) is wider than it is tall —
-  /// i.e. the phone is physically rotated to landscape. Drives both the
-  /// guide sizing above and which overlay layout [build] uses.
   bool get _isLandscape => _previewSize.width > _previewSize.height;
 
-  /// System intrusions — status bar, gesture bar, display cutout — read in
-  /// [build]. The preview is deliberately full-bleed, so the Stack is *not*
-  /// wrapped in a SafeArea; the overlay controls add these insets to their
-  /// own offsets instead.
-  ///
-  /// This matters far more in landscape than portrait. Rotated, the status
-  /// bar and the notch both move to a side edge, which is exactly where the
-  /// left info panel and the exit button sit — which is why the flow badge
-  /// was sliding under the clock and the exit button was landing on the
-  /// battery icons.
   EdgeInsets _viewPadding = EdgeInsets.zero;
 
-  /// Width of the landscape left-hand info panel.
-  static const double _landscapePanelWidth = 216;
+  static const double _landscapeColumnMinWidth = 96;
 
-  /// Horizontal room the right-hand control column needs (button plus its
-  /// margin), used to keep the guide and thumbnail strip clear of it.
-  static const double _landscapeControlColumnWidth = 96;
-
-  /// Reserved height for the bottom-left cluster (preset picker + thumbnail
-  /// wrap) in landscape. The top info column stops above this. Sized for the
-  /// worst case: a single-row preset pill row (~44), the gap (10), and a
-  /// one-row 48px thumbnail wrap — a label phase. Damage phases have no
-  /// picker and use less.
-  static const double _landscapeBottomClusterHeight = 120;
-
-
-  /// The rectangle actually available to the framing guide in landscape:
-  /// the preview minus the safe-area insets, the left info panel, the right
-  /// control column, and the bottom thumbnail strip.
-  ///
-  /// The guide is centred in *this*, not in the whole preview. Centring in
-  /// the whole preview is what put the guide's lower edge through the slot
-  /// tiles: the free space is not symmetric, because the strip only eats
-  /// into the bottom. Working from the band also allows a noticeably larger
-  /// guide than shrinking a centred one until it happened to clear.
-  /// Width reserved on the left for the bottom cluster's widest element —
-  /// the horizontal preset pill row, which now extends past the info panel.
-  /// The guide starts to the right of this so the two never overlap even
-  /// though the guide runs the full height.
-  static const double _landscapeLeftReserve = 300;
+  static const double _landscapeBadgeRowHeight = 56;
 
   Rect get _landscapeGuideBand {
-    final left = _viewPadding.left + _landscapeLeftReserve;
-    final right = _previewSize.width -
-        _landscapeControlColumnWidth -
-        _viewPadding.right;
-    // Leaves room at the top for the declare-missing pill when that step
-    // can show one, so a tall guide's top edge stays clear of it; otherwise
-    // just the normal margin.
-    final top = _viewPadding.top +
-        (_canDeclareMissing && _isLabelPhase ? 64 : 16);
-    // The thumbnails moved into the left panel, so the bottom no longer
-    // needs the reserved strip — the guide can run nearly the full height.
-    final bottom = _previewSize.height - 16 - _viewPadding.bottom;
-    return Rect.fromLTRB(left, top, right, bottom);
+    return Rect.fromLTRB(
+      _viewPadding.left,
+      _viewPadding.top + _landscapeBadgeRowHeight,
+      _previewSize.width - _viewPadding.right,
+      _previewSize.height - _viewPadding.bottom - 16,
+    );
   }
 
-  /// Where the framing guide is centred. Portrait keeps the geometric
-  /// centre of the preview; landscape uses the centre of the free band.
-  ///
-  /// The label crop reads this too (see [_takePhoto]), so the cropped
-  /// region always matches the rectangle the user was shown — moving the
-  /// guide without moving the crop would silently crop the wrong area.
+  Rect get _portraitGuideBand {
+    final top = _viewPadding.top + (_canDeclareMissing ? 170 : 126);
+    final bottom = _previewSize.height - (_isLabelPhase ? 260 : 170);
+    return Rect.fromLTRB(0, top, _previewSize.width, bottom);
+  }
+
   Offset get _guideCenter {
-    if (!_isLandscape) {
-      return Offset(_previewSize.width / 2, _previewSize.height / 2);
-    }
-    return _landscapeGuideBand.center;
+    final size = _guideSize;
+    final band = _isLandscape ? _landscapeGuideBand : _portraitGuideBand;
+
+    final x = size.width <= band.width
+        ? band.center.dx
+        : _previewSize.width / 2;
+    final y = size.height <= band.height
+        ? band.center.dy
+        : _previewSize.height / 2;
+
+    return _clampGuideCenter(Offset(x, y), size);
+  }
+
+  Rect get _guideRect {
+    final size = _guideSize;
+    return Rect.fromCenter(
+      center: _guideCenter,
+      width: size.width,
+      height: size.height,
+    );
+  }
+
+  Offset _clampGuideCenter(Offset center, Size size) {
+    final halfW = size.width / 2;
+    final halfH = size.height / 2;
+    final x = _previewSize.width >= size.width
+        ? center.dx.clamp(halfW, _previewSize.width - halfW)
+        : center.dx;
+    final y = _previewSize.height >= size.height
+        ? center.dy.clamp(halfH, _previewSize.height - halfH)
+        : center.dy;
+    return Offset(x, y);
   }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Inspection Mode starts on the label phase, same as label-only mode;
-    // damage-only mode starts (and stays) on the box phase.
+
     _phase = widget.mode == CameraMode.damage
         ? _CapturePhase.box
         : _CapturePhase.label;
     _initCamera(_cameraIndex);
-    // Prefetch the FDA dataset (and DistilBERT if enabled), plus the chosen
-    // packaging type's damage detector, while the user is still framing/
-    // capturing photos, so analysis doesn't pay full load latency.
+
     ComplianceEngine.warmUp(packagingType: widget.packagingType);
-    // Wide packaging is easier to capture tilted, so allow landscape only
-    // while this screen is open; every other screen stays portrait-locked.
+
     _applyCameraOrientations();
   }
 
@@ -407,10 +322,10 @@ class _CameraScreenState extends State<CameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
-    // Restore the portrait lock used by the rest of the app.
+
     SystemChrome.setPreferredOrientations(
         const [DeviceOrientation.portraitUp]);
-    // Best-effort cleanup of any temp photos abandoned mid-flow.
+
     for (final path in [..._labelPaths.values, ..._boxPaths.values]) {
       try {
         final f = File(path);
@@ -434,21 +349,19 @@ class _CameraScreenState extends State<CameraScreen>
         .setFlashMode(_isFlashOn ? FlashMode.torch : FlashMode.off);
   }
 
-  // ── Pinch to zoom ──────────────────────────────────────────────────────────
   void _onScaleStart(ScaleStartDetails details) {
     _baseZoom = _currentZoom;
   }
 
   Future<void> _onScaleUpdate(ScaleUpdateDetails details) async {
     if (_controller == null || !_controller!.value.isInitialized) return;
-    if (details.pointerCount < 2) return; // only act on pinch, not single tap
+    if (details.pointerCount < 2) return;
     final newZoom = (_baseZoom * details.scale).clamp(_minZoom, _maxZoom);
-    if ((newZoom - _currentZoom).abs() < 0.01) return; // skip tiny changes
+    if ((newZoom - _currentZoom).abs() < 0.01) return;
     setState(() => _currentZoom = newZoom);
     await _controller!.setZoomLevel(newZoom);
   }
 
-  // ── Tap to focus ───────────────────────────────────────────────────────────
   Future<void> _onTapFocus(TapUpDetails details) async {
     if (_controller == null || !_controller!.value.isInitialized) return;
     final RenderBox box = context.findRenderObject() as RenderBox;
@@ -469,7 +382,6 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
-  // ── Take photo ─────────────────────────────────────────────────────────────
   Future<void> _takePhoto() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
     if (_isTaking || _isProcessing) return;
@@ -478,10 +390,6 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final XFile photo = await _controller!.takePicture();
 
-      // takePicture() writes into the plugin's cache directory, which Android
-      // is free to reclaim part-way through a scan. Move the shot into the
-      // app's own captures folder before anything else refers to it; the crop
-      // below then lands beside it, and both are cleared when the flow ends.
       final stagedPath = await AppStorage.newCapturePath(
         prefix: _isLabelPhase
             ? _labelSlots[_slotIndex].slot.name
@@ -491,14 +399,11 @@ class _CameraScreenState extends State<CameraScreen>
       try {
         await File(photo.path).delete();
       } catch (_) {
-        // The plugin's own temp copy is best-effort cleanup, not correctness.
+
       }
 
       if (_isLabelPhase) {
-        // Isolate the label region: crop to the framing guide so OCR isn't
-        // distracted by the surrounding scene.
-        // Same centre the guide was drawn at, so the crop matches exactly
-        // what the user framed in either orientation.
+
         final guide = Rect.fromCenter(
           center: _guideCenter,
           width: _guideSize.width,
@@ -512,7 +417,7 @@ class _CameraScreenState extends State<CameraScreen>
         final slot = _labelSlots[_slotIndex].slot;
         _labelPaths[slot] = croppedPath;
       } else {
-        // Packaging shots are used full-frame for damage detection — no crop.
+
         _boxPaths[_boxSlots[_slotIndex].slot] = stagedPath;
       }
 
@@ -532,15 +437,11 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Records the current label element (expiration or ingredients) as absent
-  /// from the packaging and advances without a photo. The scan will be flagged
-  /// non-compliant for the missing element.
   Future<void> _declareCurrentMissing() async {
     if (_isTaking || _isProcessing) return;
     final slot = _currentLabelSlot;
     if (slot == null) return;
 
-    // Drop any photo already taken for this slot (unlikely mid-flow).
     final existing = _labelPaths.remove(slot);
     if (existing != null) {
       try {
@@ -559,8 +460,6 @@ class _CameraScreenState extends State<CameraScreen>
       return;
     }
 
-    // Inspection Mode: after the last label slot, move on to the packaging
-    // phase instead of analyzing yet.
     if (widget.mode == CameraMode.inspection && _isLabelPhase) {
       setState(() {
         _phase = _CapturePhase.box;
@@ -582,7 +481,6 @@ class _CameraScreenState extends State<CameraScreen>
     await _runAnalysis();
   }
 
-  // ── Run the analysis for whichever mode this screen is in ──────────────
   Future<void> _runAnalysis() async {
     switch (widget.mode) {
       case CameraMode.label:
@@ -597,15 +495,11 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// OCRs every captured label crop, routing each slot's text to its own
-  /// field (see LabelParser) instead of guessing field boundaries out of one
-  /// combined blob. Shared by label-only and Inspection Mode.
   Future<_OcrResult> _ocrLabelSlots() async {
     final textRecognizer = TextRecognizer();
     final textBySlot = <PhotoSlot, String>{};
     final buffer = StringBuffer();
-    // Mean OCR confidence on the product-name (front) crop — gates the
-    // last-ditch semantic tier in ComplianceEngine.
+
     double? nameConfidence;
     DateCode? dateCode;
     try {
@@ -614,7 +508,7 @@ class _CameraScreenState extends State<CameraScreen>
         if (path == null) continue;
         final profile = _profileFor(spec.slot);
         final recognized =
-            await _recognizeEnhanced(textRecognizer, path, profile);
+        await _recognizeEnhanced(textRecognizer, path, profile);
         if (recognized == null) continue;
 
         switch (spec.slot) {
@@ -622,9 +516,7 @@ class _CameraScreenState extends State<CameraScreen>
             nameConfidence = _meanLineConfidence(recognized);
             textBySlot[spec.slot] = _frontTextByProminence(recognized);
           case PhotoSlot.expiration:
-            // Structure matters here, not just the text: which value belongs
-            // to which label is decided geometrically, and an unreadable code
-            // has to stay distinguishable from an absent one.
+
             dateCode = DateCodeParser.parse(
               recognized,
               maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
@@ -650,28 +542,17 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// The preprocessing profile tuned for each crop. They must not share one:
-  /// the dot-merge kernel that rescues an inkjet date code fills the counters
-  /// of large brand type.
   static OcrProfile _profileFor(PhotoSlot slot) => switch (slot) {
-        PhotoSlot.front => OcrProfile.productName,
-        PhotoSlot.expiration => OcrProfile.dateCode,
-        PhotoSlot.ingredients => OcrProfile.ingredients,
-      };
+    PhotoSlot.front => OcrProfile.productName,
+    PhotoSlot.expiration => OcrProfile.dateCode,
+    PhotoSlot.ingredients => OcrProfile.ingredients,
+  };
 
-  /// Runs ML Kit over an enhanced copy of the crop at [path].
-  ///
-  /// ML Kit wraps a frozen pretrained model that cannot be trained or tuned,
-  /// so the only lever left is what it gets shown: the crop is upscaled,
-  /// locally contrast-stretched, and — for date codes — dot-merged first, so
-  /// that dot-matrix marking arrives as the continuous strokes the recognizer
-  /// was trained on. If any of that fails the original crop is used instead,
-  /// so a scan never breaks over preprocessing.
   Future<RecognizedText?> _recognizeEnhanced(
-    TextRecognizer recognizer,
-    String path,
-    OcrProfile profile,
-  ) async {
+      TextRecognizer recognizer,
+      String path,
+      OcrProfile profile,
+      ) async {
     String? enhancedPath;
     try {
       final decoded = img.decodeImage(await File(path).readAsBytes());
@@ -699,18 +580,12 @@ class _CameraScreenState extends State<CameraScreen>
         try {
           await File(enhancedPath).delete();
         } catch (_) {
-          // Temp file cleanup is best-effort; main() clears the folder anyway.
+
         }
       }
     }
   }
 
-  /// Front-panel text with the physically largest words moved to the front.
-  ///
-  /// The product name is almost always the biggest thing printed on a pack,
-  /// which is a far stronger prior than reading order — ML Kit routinely
-  /// returns a dosage or a regulatory footnote before the brand. The full text
-  /// still follows, so the existing noise filtering keeps its fallback.
   String _frontTextByProminence(RecognizedText recognized) {
     final lines = OcrGeometry.horizontalLines(
       recognized,
@@ -727,7 +602,6 @@ class _CameraScreenState extends State<CameraScreen>
       if (_boxPaths[spec.slot] != null) _boxPaths[spec.slot]!,
   ];
 
-  // ── OCR the label crops, then run the label-compliance analysis ────────
   Future<void> _runLabelAnalysis() async {
     setState(() {
       _isProcessing = true;
@@ -751,7 +625,6 @@ class _CameraScreenState extends State<CameraScreen>
     await _finishAnalysis(record);
   }
 
-  // ── Run the packaging/damage analysis directly — no OCR involved ───────
   Future<void> _runDamageAnalysis() async {
     setState(() {
       _isProcessing = true;
@@ -766,7 +639,6 @@ class _CameraScreenState extends State<CameraScreen>
     await _finishAnalysis(record);
   }
 
-  // ── OCR + damage check together, combined into one verdict ─────────────
   Future<void> _runInspectionAnalysis() async {
     setState(() {
       _isProcessing = true;
@@ -807,12 +679,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (mounted) setState(() => _isProcessing = false);
 
     if (mounted) {
-      // The result screen is portrait-only. The camera allows landscape,
-      // and pushing the result over it would otherwise inherit whatever way
-      // the phone was being held — which is what rendered the result card
-      // sideways and clipped. Force portrait for the result, then restore
-      // the camera's orientation set on the way back so the next capture
-      // can still be shot in landscape.
+
       await SystemChrome.setPreferredOrientations(
           const [DeviceOrientation.portraitUp]);
       await Navigator.of(context).push(
@@ -825,10 +692,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Orientations allowed while the camera is on screen: portrait plus both
-  /// landscapes, so wide packaging can be captured by turning the phone.
-  /// Pulled out so [_finishAnalysis] can restore it after the portrait-only
-  /// result screen.
   void _applyCameraOrientations() {
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
@@ -837,9 +700,6 @@ class _CameraScreenState extends State<CameraScreen>
     ]);
   }
 
-  /// Mean recognized-line confidence (0..1) across [recognized], or null if
-  /// ML Kit didn't populate confidences (e.g. on platforms/models that omit
-  /// them) — in which case the caller treats OCR as "not known to be low".
   double? _meanLineConfidence(RecognizedText recognized) {
     var sum = 0.0;
     var count = 0;
@@ -855,7 +715,6 @@ class _CameraScreenState extends State<CameraScreen>
     return count == 0 ? null : sum / count;
   }
 
-  // ── Check duplicate name ───────────────────────────────────────────────────
   Future<bool> _nameExists(String raw) => ScanStore.recordExists(raw);
 
   void _resetCaptureFlow() {
@@ -878,8 +737,6 @@ class _CameraScreenState extends State<CameraScreen>
     _resetCaptureFlow();
   }
 
-  /// Confirms before wiping every captured photo and restarting the flow from
-  /// the first slot.
   Future<void> _confirmClearAll() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -915,8 +772,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  /// Confirms before leaving this scan and popping back to the chooser.
-  /// Skips the confirmation if nothing has been captured yet.
   Future<void> _confirmExit() async {
     if (_isTaking || _isProcessing) return;
     final hasPhotos = _labelPaths.isNotEmpty || _boxPaths.isNotEmpty;
@@ -949,12 +804,9 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  // ── Save Record bottom sheet ───────────────────────────────────────────────
   void _showSaveSheet(ScanRecord record) {
     final TextEditingController nameController = TextEditingController();
-    // The outer screen's own context, kept so we can pop CameraScreen itself
-    // (back to the Homepage) once the sheet — which sits on its own route —
-    // has been dismissed.
+
     final BuildContext cameraContext = context;
 
     showModalBottomSheet(
@@ -1106,11 +958,7 @@ class _CameraScreenState extends State<CameraScreen>
                             Navigator.of(context).pop();
                             final saved = await _saveRecord(raw, record);
                             if (saved && cameraContext.mounted) {
-                              // Back to the Homepage, not the packaging
-                              // chooser this scan came through: returning
-                              // there shows a stale "Last used" marker for
-                              // the scan just finished. popUntil clears the
-                              // camera and chooser together.
+
                               Navigator.of(cameraContext)
                                   .popUntil((route) => route.isFirst);
                             }
@@ -1141,8 +989,6 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  // ── Save record ─────────────────────────────────────────────────────────────
-  /// Returns true if the record was saved successfully.
   Future<bool> _saveRecord(String rawName, ScanRecord record) async {
     try {
       final dir = await ScanStore.save(
@@ -1152,7 +998,6 @@ class _CameraScreenState extends State<CameraScreen>
         record: record,
       );
 
-      // Submit flagged results to central dashboard (fire-and-forget)
       ReportService.submit(
         recordDir: dir,
         record: record,
@@ -1183,7 +1028,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     if (!_isReady || _controller == null) {
@@ -1209,20 +1053,16 @@ class _CameraScreenState extends State<CameraScreen>
       backgroundColor: Colors.black,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          // The guide is centered in this space; reuse it as the crop
-          // coordinate system for label photos. Also drives _isLandscape,
-          // which both _guideSize and the overlay layout below key off of.
+
           _previewSize = Size(constraints.maxWidth, constraints.maxHeight);
-          // Read fresh every build: rotating the device moves which edges
-          // the status bar and cutout occupy, and the landscape offsets
-          // below depend on it.
+
           _viewPadding = MediaQuery.of(context).padding;
           final isLandscape = _isLandscape;
 
           return Stack(
             fit: StackFit.expand,
             children: [
-              // Camera preview — GestureDetector wraps it for pinch + tap
+
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onScaleStart: _onScaleStart,
@@ -1231,51 +1071,22 @@ class _CameraScreenState extends State<CameraScreen>
                 child: CameraPreview(_controller!),
               ),
 
-              // Framing guide. Positioned at the guide's exact centre with a
-              // -50%/-50% translation, so the rectangle's true centre lands
-              // on _guideCenter regardless of its size. (Alignment-based
-              // placement pulls a child toward the preview middle by a
-              // fraction of its own size, which made the guide and the pill
-              // above it centre on different points.) The pill uses the same
-              // method, so the two share a vertical centre line.
               Positioned(
                 left: _guideCenter.dx,
                 top: _guideCenter.dy,
                 child: FractionalTranslation(
                   translation: const Offset(-0.5, -0.5),
                   child: IgnorePointer(
-                    child: Container(
-                      width: _guideSize.width,
-                      height: _guideSize.height,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          width: 1.5,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: _currentZoom > _minZoom + 0.05
-                          ? Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '${_currentZoom.toStringAsFixed(1)}x',
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 14),
-                        ),
-                      )
+                    child: _GuideFrame(
+                      size: _guideSize,
+                      zoomLabel: _currentZoom > _minZoom + 0.05
+                          ? '${_currentZoom.toStringAsFixed(1)}x'
                           : null,
                     ),
                   ),
                 ),
               ),
 
-              // Focus circle indicator — always in tree, animates on each tap
               if (_focusPoint != null)
                 Positioned(
                   left: _focusPoint!.dx - 35,
@@ -1286,10 +1097,6 @@ class _CameraScreenState extends State<CameraScreen>
                   ),
                 ),
 
-              // Everything else — header, shortcuts, guide preset picker,
-              // thumbnails, and the shutter/flip/flash controls — is laid
-              // out completely differently depending on orientation, since
-              // portrait has vertical room to spare and landscape doesn't.
               ...isLandscape
                   ? _landscapeOverlay(isLabelPhase)
                   : _portraitOverlay(isLabelPhase),
@@ -1300,39 +1107,17 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  // ── Portrait overlay ──────────────────────────────────────────────────
-  // The original layout: header banner across the top, shutter/flip/flash
-  // in a row along the bottom. Plenty of vertical room, so everything
-  // stacks.
   List<Widget> _portraitOverlay(bool isLabelPhase) {
     return [
       Positioned(
-        top: 56,
-        left: 20,
-        right: 20,
-        child: _headerColumn(isLabelPhase),
+        top: _viewPadding.top + 10,
+        left: 14,
+        right: 14,
+        child: _topCluster(),
       ),
-
-      // Clear-all shortcut — top-left. Only shown once at least one photo
-      // has been captured, so there's something to discard.
-      if (!_isProcessing &&
-          (_labelPaths.isNotEmpty || _boxPaths.isNotEmpty))
-        Positioned(top: 52, left: 12, child: _clearAllButton()),
-
-      // Exit shortcut — top-right. Pops back to the Homepage.
-      if (!_isProcessing)
-        Positioned(top: 52, right: 12, child: _exitButton()),
-
-      // "No <element> on the box" — horizontally centered on the guide
-      // rectangle and sitting just above its top edge, per step.
-      if (isLabelPhase && !_isProcessing && _canDeclareMissing)
-        _declareMissingPositioned(),
 
       if (_isProcessing) _processingOverlay(),
 
-      // Framing-box preset selector — label phase only. Sits well above
-      // the thumbnail strip (bottom: 120, ~70px tall) so the
-      // Small/Medium/Large pills don't crowd the slot thumbnails.
       if (isLabelPhase && !_isProcessing)
         Positioned(
           bottom: 212,
@@ -1341,17 +1126,15 @@ class _CameraScreenState extends State<CameraScreen>
           child: Center(child: _buildGuideControl()),
         ),
 
-      // Thumbnail strip for the current phase
       Positioned(
-        bottom: 120,
+        bottom: 118,
         left: 0,
         right: 0,
         child: _thumbnailRow(isLabelPhase),
       ),
 
-      // Bottom controls — above the gesture layer so buttons work
       Positioned(
-        bottom: 32,
+        bottom: 28,
         left: 0,
         right: 0,
         child: Row(
@@ -1362,113 +1145,37 @@ class _CameraScreenState extends State<CameraScreen>
     ];
   }
 
-  // ── Landscape overlay ─────────────────────────────────────────────────
-  // Landscape trades vertical room for horizontal: the badge, title, helper,
-  // and clear-all sit in a top-left column; the preset picker and thumbnails
-  // sit in a bottom-left cluster; the declare-missing pill is centered above
-  // the guide; the
-  // shutter/flip/flash controls move into a column centered on the right
-  // edge instead of a bottom row; the thumbnail strip stays a horizontal
-  // row, narrowed to the space between the two side columns instead of
-  // spanning full width. The exit button is the one piece that stays a
-  // simple top corner in both orientations.
   List<Widget> _landscapeOverlay(bool isLabelPhase) {
-    // Every offset is padded by the system insets. Rotated, the status bar
-    // and cutout sit on a side edge — the same edge as the info panel and
-    // the exit button — so without this the badge slides under the clock
-    // and the exit button lands on the battery icons.
+
     final leftInset = _viewPadding.left;
     final rightInset = _viewPadding.right;
     final topInset = _viewPadding.top;
     final bottomInset = _viewPadding.bottom;
 
+    final columnLeft = 16 + leftInset;
+
+    final columnWidth = (_guideRect.left - 14 - columnLeft).clamp(0.0, 420.0);
+
     return [
-      // Top-left cluster — clear-all, mode badge, title, helper text, and
-      // the declare-missing pill. Anchored to the TOP and allowed to take
-      // only the height it needs. It is deliberately NOT in the same column
-      // as the preset picker and thumbnails: stacking all of it made the
-      // panel taller than a short landscape screen and forced a scroll.
-      // Splitting top-anchored info from bottom-anchored controls means
-      // neither can push the other off-screen.
+
       Positioned(
-        left: 16 + leftInset,
-        top: 16 + topInset,
-        // Stops above the bottom cluster's zone so the two never collide.
-        bottom: _landscapeBottomClusterHeight + 16 + bottomInset,
-        width: _landscapePanelWidth,
-        // No FittedBox: the text renders at one fixed size on every step.
-        // The earlier scale-to-fit is what made each step look different,
-        // since steps carry different amounts of text. Fixed sizing plus a
-        // worst-case-sized bottom reserve keeps it consistent and keeps it
-        // from ever needing to scroll.
-        child: Align(
-          alignment: Alignment.topLeft,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!_isProcessing &&
-                  (_labelPaths.isNotEmpty || _boxPaths.isNotEmpty)) ...[
-                _clearAllButton(),
-                const SizedBox(height: 10),
-              ],
-              _headerColumn(
-                isLabelPhase,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                textAlign: TextAlign.left,
-              ),
-            ],
-          ),
-        ),
+        top: topInset + 8,
+        left: 34 + leftInset,
+        right: 34 + rightInset,
+        child: _topCluster(withText: false),
       ),
 
-      // Bottom-left cluster — the guide preset picker and the per-slot
-      // thumbnails, anchored to the BOTTOM corner. Fixed, shallow height so
-      // it can't grow into a scroll, and it sits in the dead space under
-      // the guide's left side rather than over it.
-      if (!_isProcessing)
+      if (!_isProcessing && columnWidth >= _landscapeColumnMinWidth)
         Positioned(
-          left: 16 + leftInset,
+          left: columnLeft,
+          top: topInset + _landscapeBadgeRowHeight,
           bottom: 16 + bottomInset,
-          // Bounded on the right only, so the horizontal preset row can run
-          // wider than the info panel into the open space — but never into
-          // the shutter/flip/flash column.
-          right: _landscapeControlColumnWidth + rightInset,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isLabelPhase) ...[
-                  _buildGuideControl(),
-                  const SizedBox(height: 10),
-                ],
-                _thumbnailWrap(isLabelPhase),
-              ],
-            ),
-          ),
-        ),
-
-      // "No <element> on the box" — horizontally centered on the guide
-      // rectangle and sitting just above its top edge, same as portrait.
-      if (isLabelPhase && !_isProcessing && _canDeclareMissing)
-        _declareMissingPositioned(),
-
-      // Exit shortcut — top-right corner in both orientations. The control
-      // column on the right is vertically centered (see below), so this
-      // never collides with it.
-      if (!_isProcessing)
-        Positioned(
-          top: 12 + topInset,
-          right: 16 + rightInset,
-          child: _exitButton(),
+          width: columnWidth,
+          child: _landscapeInfoColumn(isLabelPhase),
         ),
 
       if (_isProcessing) _processingOverlay(),
 
-      // Right control column — flip/shutter/flash stacked vertically and
-      // centered along the full height, replacing the portrait bottom row.
       Positioned(
         right: 16 + rightInset,
         top: topInset,
@@ -1478,9 +1185,9 @@ class _CameraScreenState extends State<CameraScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               _flipButton(),
-              const SizedBox(height: 22),
+              const SizedBox(height: 20),
               _shutterButton(),
-              const SizedBox(height: 22),
+              const SizedBox(height: 20),
               _flashButton(),
             ],
           ),
@@ -1489,127 +1196,168 @@ class _CameraScreenState extends State<CameraScreen>
     ];
   }
 
-  // ── Shared overlay pieces ────────────────────────────────────────────
-  // Built once, arranged differently by each orientation's overlay above.
+  Widget _landscapeInfoColumn(bool isLabelPhase) {
 
-  /// Mode badge, photo count, title, helper text, and (when relevant) the
-  /// "not on the box" button. [crossAxisAlignment]/[textAlign] let the
-  /// landscape overlay left-align this in a narrow column instead of the
-  /// portrait centered banner.
-  Widget _headerColumn(
-      bool isLabelPhase, {
-        CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment.center,
-        TextAlign textAlign = TextAlign.center,
-      }) {
     return Column(
-      crossAxisAlignment: crossAxisAlignment,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _stepText(leftAligned: true),
+                if (_canDeclareMissing) ...[
+                  const SizedBox(height: 10),
+                  _declareMissingPill(),
+                ],
+              ],
+            ),
+          ),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isLabelPhase) ...[
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: _buildGuideControl(),
+              ),
+              const SizedBox(height: 10),
+            ],
+            _thumbnailWrap(isLabelPhase),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _topCluster({bool withText = true}) {
+    final hasPhotos = _labelPaths.isNotEmpty || _boxPaths.isNotEmpty;
+
+    return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Which check this session is running.
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: _modeBadgeColor,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            _modeBadgeText,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.6,
-            ),
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            _modeBadge(),
+            if (!_isProcessing)
+              Row(
+                children: [
+                  _iconButton(
+                      Icons.close, _isTaking ? null : _confirmExit),
+                  const Spacer(),
+                  _iconButton(
+                      Icons.info_outline, () => showCaptureTips(context)),
+                  if (hasPhotos) ...[
+                    const SizedBox(width: 8),
+                    _iconButton(Icons.delete_outline,
+                        _isTaking ? null : _confirmClearAll),
+                  ],
+                ],
+              ),
+          ],
+        ),
+        if (withText && !_isProcessing) ...[
+          const SizedBox(height: 10),
+          _stepText(),
+
+          if (_canDeclareMissing) ...[
+            const SizedBox(height: 10),
+            _declareMissingPill(),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _modeBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      decoration: BoxDecoration(
+        color: _modeBadgeColor,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _modeBadgeText,
+        style: const TextStyle(
+          color: _camOnAccent,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.8,
+        ),
+      ),
+    );
+  }
+
+  Widget _stepText({bool leftAligned = false}) {
+    final counter = leftAligned
+        ? 'STEP ${_slotIndex + 1}/$_slotCount'
+        : 'STEP ${_slotIndex + 1} OF $_slotCount · '
+        '${_currentTitle.toUpperCase()}';
+
+    return Column(
+      crossAxisAlignment:
+      leftAligned ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          counter,
+          textAlign: leftAligned ? TextAlign.left : TextAlign.center,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.7),
+            fontSize: 11.5,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.1,
           ),
         ),
         const SizedBox(height: 6),
         Text(
-          'PHOTO ${_slotIndex + 1} OF $_slotCount',
-          textAlign: textAlign,
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.85),
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.6,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          _currentTitle,
-          textAlign: textAlign,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
           _currentHelper,
-          textAlign: textAlign,
+          textAlign: leftAligned ? TextAlign.left : TextAlign.center,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.8),
-            fontSize: 13,
+            color: Colors.white.withValues(alpha: 0.92),
+            fontSize: leftAligned ? 13 : 15,
+            fontWeight: FontWeight.w500,
+            height: 1.3,
           ),
         ),
       ],
     );
   }
 
-  /// Positions [_declareMissingPill] so its horizontal center aligns with
-  /// the guide rectangle's center, sitting just above the rectangle's top
-  /// edge. Both are derived from [_guideCenter] and [_guideSize], so the
-  /// pill tracks the guide across steps and orientations without a separate
-  /// anchor to keep in sync.
-  ///
-  /// The pill's own width is unknown until layout, so it is centered with a
-  /// FractionalTranslation(-0.5) around the guide's center x rather than by
-  /// computing left/right — that keeps it centered whatever the caption
-  /// length.
-  Widget _declareMissingPositioned() {
-    // Horizontal position tracks the guide rectangle's centre, so the pill
-    // sits directly over whichever rectangle the current step shows.
-    // Vertical position is FIXED near the top of the screen — it does not
-    // follow the guide's top edge — so the pill stays put across steps and
-    // only slides left/right to stay centred on the rectangle.
-    //
-    // Centering is done with an Align across the FULL width rather than a
-    // left offset plus a translation: the pill's own width is unknown until
-    // layout, and the earlier translation-based approach shifted it by half
-    // its measured width, landing it right of the guide's centre. Align maps
-    // the guide's centre x to an alignment value directly, so the result is
-    // exact regardless of caption length.
-    final topY = _viewPadding.top + (_isLandscape ? 16 : 56);
-    return Positioned(
-      left: _guideCenter.dx,
-      top: topY,
-      child: FractionalTranslation(
-        // -0.5 on x only: centre on the guide's x, keep the given top y.
-        // This is the exact method the guide rectangle uses, so the pill's
-        // centre and the rectangle's centre fall on the same vertical line
-        // whatever either one's width.
-        translation: const Offset(-0.5, 0),
-        child: _declareMissingPill(),
+  Widget _iconButton(IconData icon, VoidCallback? onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: const BoxDecoration(
+          color: _camControlBg,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: Colors.white, size: 19),
       ),
     );
   }
 
-  /// The "No <element> on the box" pill, shown top-center above the guide
-  /// during label phases. Pulled out of the header column and given its own
-  /// centered anchor: inside the column it overflowed the fixed-height left
-  /// panel (the yellow-black stripe on the expiration and ingredient steps),
-  /// and it sat over the preset picker. Centered above the guide, it clears
-  /// every other control.
   Widget _declareMissingPill() {
     return GestureDetector(
       onTap: _isTaking ? null : _declareCurrentMissing,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(20),
+          color: _camTrackBg,
+          borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: Colors.white.withValues(alpha: 0.6),
+            color: Colors.white.withValues(alpha: 0.35),
           ),
         ),
         child: Row(
@@ -1618,57 +1366,20 @@ class _CameraScreenState extends State<CameraScreen>
             const Icon(Icons.report_gmailerrorred_outlined,
                 color: Colors.white, size: 16),
             const SizedBox(width: 6),
-            Text(
-              _currentLabelSlot == PhotoSlot.expiration
-                  ? 'No expiration date on the box'
-                  : 'No ingredient list on the box',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+            Flexible(
+              child: Text(
+                _currentLabelSlot == PhotoSlot.expiration
+                    ? 'No expiration date on the box'
+                    : 'No ingredient list on the box',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _clearAllButton() {
-    return GestureDetector(
-      onTap: _isTaking ? null : _confirmClearAll,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.delete_outline, color: Colors.white, size: 16),
-            SizedBox(width: 5),
-            Text('Clear all',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _exitButton() {
-    return GestureDetector(
-      onTap: _isTaking ? null : _confirmExit,
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.5),
-          shape: BoxShape.circle,
-        ),
-        child: const Icon(Icons.close, color: Colors.white, size: 18),
       ),
     );
   }
@@ -1686,8 +1397,10 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Widget _thumbnailRow(bool isLabelPhase) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 20,
+      runSpacing: 10,
       children: isLabelPhase
           ? [
         for (var i = 0; i < _labelSlots.length; i++)
@@ -1710,8 +1423,8 @@ class _CameraScreenState extends State<CameraScreen>
 
   Widget _flipButton() {
     return _CircleButton(
-      color: Colors.black.withValues(alpha: 0.6),
-      icon: Icons.flip_camera_android,
+      color: _camControlBg,
+      icon: Icons.refresh,
       iconColor: Colors.white,
       size: 52,
       onTap: _isProcessing ? null : _switchCamera,
@@ -1721,9 +1434,9 @@ class _CameraScreenState extends State<CameraScreen>
   Widget _shutterButton() {
     return _CircleButton(
       color: Colors.white,
-      icon: _isTaking ? null : Icons.circle,
+      icon: null,
       iconColor: Colors.white,
-      size: 72,
+      size: 76,
       onTap: (_isTaking || _isProcessing) ? null : _takePhoto,
       isShutter: true,
       isTaking: _isTaking,
@@ -1732,7 +1445,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   Widget _flashButton() {
     return _CircleButton(
-      color: Colors.grey.withValues(alpha: 0.6),
+      color: _camControlBg,
       icon: _isFlashOn ? Icons.flash_on : Icons.flash_off,
       iconColor: Colors.white,
       size: 52,
@@ -1740,15 +1453,13 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// The framing-box control shown during a label phase: a preset picker for
-  /// most slots, or a locked "fixed tight frame" badge for the expiration slot.
   Widget _buildGuideControl() {
     if (_currentLabelSlot == PhotoSlot.expiration) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(24),
+          color: _camTrackBg,
+          borderRadius: BorderRadius.circular(999),
         ),
         child: const Row(
           mainAxisSize: MainAxisSize.min,
@@ -1762,15 +1473,11 @@ class _CameraScreenState extends State<CameraScreen>
       );
     }
 
-    // Single horizontal row in both orientations. It is allowed to be wider
-    // than the left info panel — only the framing guide is used for the
-    // actual capture, so the pills can extend right into the open space
-    // rather than wrapping down and eating vertical room.
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(24),
+        color: _camTrackBg,
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1781,11 +1488,6 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// Compact thumbnail block for the landscape left panel: small tiles that
-  /// wrap left-to-right instead of stacking in a tall column. Four tiles at
-  /// full size made the panel overflow into a scroll on short landscape
-  /// heights; a wrap of ~40px tiles fits without one and never reaches the
-  /// guide.
   Widget _thumbnailWrap(bool isLabelPhase) {
     final slots = isLabelPhase ? _labelSlots : _boxSlots;
     return Wrap(
@@ -1811,24 +1513,25 @@ class _CameraScreenState extends State<CameraScreen>
       onTap: _isTaking ? null : () => setState(() => _guidePresetIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF4CAF50) : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
+          color: selected ? _camAccent : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
         ),
         child: Text(
           _guidePresets[index].label,
           style: TextStyle(
-            color: Colors.white,
+            color: selected
+                ? _camOnAccent
+                : Colors.white.withValues(alpha: 0.75),
             fontSize: 13,
-            fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
           ),
         ),
       ),
     );
   }
 
-  /// First word of a slot title, used as the compact thumbnail caption.
   static String _shortTitle(String title) {
     final dashIndex = title.indexOf('—');
     final cleaned = dashIndex == -1 ? title : title.substring(dashIndex + 1).trim();
@@ -1836,14 +1539,11 @@ class _CameraScreenState extends State<CameraScreen>
   }
 }
 
-/// Bundles the per-slot OCR text, the concatenated text used for registry
-/// matching, and the product-name crop's mean confidence.
 class _OcrResult {
   final Map<PhotoSlot, String> textBySlot;
   final String combinedText;
   final double? nameConfidence;
 
-  /// Structured read of the expiration crop, or null if that slot was skipped.
   final DateCode? dateCode;
 
   const _OcrResult({
@@ -1854,18 +1554,12 @@ class _OcrResult {
   });
 }
 
-// ── Slot thumbnail ─────────────────────────────────────────────────────────────
-
 class _SlotThumbnail extends StatelessWidget {
-  /// Caption under the tile. Null in the landscape thumbnail wrap, where the
-  /// tiles are unlabelled to stay compact, so the built-in caption would
-  /// only add height.
+
   final String? label;
   final bool isCurrent;
   final String? imagePath;
 
-  /// Tile edge length. Defaults to the portrait size; the landscape wrap
-  /// passes a smaller value so four tiles fit without scrolling.
   final double size;
 
   const _SlotThumbnail({
@@ -1887,13 +1581,15 @@ class _SlotThumbnail extends StatelessWidget {
               width: size,
               height: size,
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(8),
+                color: isCurrent
+                    ? _camAccent.withValues(alpha: 0.18)
+                    : _camControlBg,
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(
                   color: isCurrent
-                      ? const Color(0xFF4CAF50)
-                      : Colors.white.withValues(alpha: 0.4),
-                  width: isCurrent ? 2.5 : 1,
+                      ? _camAccent
+                      : Colors.white.withValues(alpha: 0.28),
+                  width: isCurrent ? 2 : 1,
                 ),
                 image: imagePath != null
                     ? DecorationImage(
@@ -1904,7 +1600,9 @@ class _SlotThumbnail extends StatelessWidget {
               ),
               child: imagePath == null
                   ? Icon(Icons.image_outlined,
-                  color: Colors.white.withValues(alpha: 0.5),
+                  color: isCurrent
+                      ? _camAccent
+                      : Colors.white.withValues(alpha: 0.5),
                   size: size * 0.4)
                   : null,
             ),
@@ -1915,20 +1613,26 @@ class _SlotThumbnail extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(2),
                   decoration: const BoxDecoration(
-                    color: Color(0xFF4CAF50),
+                    color: _camAccent,
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.check,
-                      size: 10, color: Colors.white),
+                      size: 10, color: _camOnAccent),
                 ),
               ),
           ],
         ),
         if (label != null) ...[
-          const SizedBox(height: 3),
+          const SizedBox(height: 5),
           Text(
             label!,
-            style: const TextStyle(color: Colors.white, fontSize: 10),
+            style: TextStyle(
+              color: isCurrent
+                  ? _camAccent
+                  : Colors.white.withValues(alpha: 0.7),
+              fontSize: 10.5,
+              fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+            ),
           ),
         ],
       ],
@@ -1936,7 +1640,121 @@ class _SlotThumbnail extends StatelessWidget {
   }
 }
 
-// ── Circle button ──────────────────────────────────────────────────────────────
+class _GuideFrame extends StatelessWidget {
+  final Size size;
+
+  final String? zoomLabel;
+
+  const _GuideFrame({required this.size, this.zoomLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    final arm = (size.shortestSide * 0.26).clamp(18.0, 46.0);
+
+    return SizedBox(
+      width: size.width,
+      height: size.height,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(painter: _GuideCornerPainter(arm: arm)),
+          ),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Container(
+                height: 2,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      _camAccent.withValues(alpha: 0),
+                      _camAccent,
+                      _camAccent.withValues(alpha: 0),
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _camAccent.withValues(alpha: 0.5),
+                      blurRadius: 12,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (zoomLabel != null)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _camTrackBg,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    zoomLabel!,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GuideCornerPainter extends CustomPainter {
+  final double arm;
+
+  const _GuideCornerPainter({required this.arm});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const r = 16.0;
+    final w = size.width;
+    final h = size.height;
+
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.95)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final path = Path()
+      ..moveTo(0, arm + r)
+      ..lineTo(0, r)
+      ..arcToPoint(const Offset(r, 0), radius: const Radius.circular(r))
+      ..lineTo(arm + r, 0)
+      ..moveTo(w - arm - r, 0)
+      ..lineTo(w - r, 0)
+      ..arcToPoint(Offset(w, r), radius: const Radius.circular(r))
+      ..lineTo(w, arm + r)
+      ..moveTo(w, h - arm - r)
+      ..lineTo(w, h - r)
+      ..arcToPoint(Offset(w - r, h), radius: const Radius.circular(r))
+      ..lineTo(w - arm - r, h)
+      ..moveTo(arm + r, h)
+      ..lineTo(r, h)
+      ..arcToPoint(Offset(0, h - r), radius: const Radius.circular(r))
+      ..lineTo(0, h - arm - r);
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_GuideCornerPainter oldDelegate) =>
+      oldDelegate.arm != arm;
+}
 
 class _CircleButton extends StatelessWidget {
   final Color color;
@@ -1959,31 +1777,43 @@ class _CircleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (isShutter) {
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: size,
+          height: size,
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.black.withValues(alpha: 0.35),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.9), width: 3),
+          ),
+          child: isTaking
+              ? const Padding(
+            padding: EdgeInsets.all(12),
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.white),
+          )
+              : Container(
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+          ),
+        ),
+      );
+    }
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          border: isShutter
-              ? Border.all(color: Colors.white, width: 4)
-              : null,
-        ),
-        child: isTaking
-            ? const Padding(
-          padding: EdgeInsets.all(16),
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: Colors.black),
-        )
-            : Icon(icon, color: iconColor, size: size * 0.45),
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        child: Icon(icon, color: iconColor, size: size * 0.42),
       ),
     );
   }
 }
-
-// ── Focus circle animation ─────────────────────────────────────────────────────
 
 class _FocusCircle extends StatefulWidget {
   final bool visible;
@@ -2007,12 +1837,10 @@ class _FocusCircleState extends State<_FocusCircle>
       duration: const Duration(milliseconds: 800),
     );
 
-    // Scale from slightly large → normal size (snappy lock-in feel)
     _scale = Tween<double>(begin: 1.3, end: 1.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOut),
     );
 
-    // Fade in quickly, then fade out toward the end
     _opacity = TweenSequence([
       TweenSequenceItem(
           tween: Tween<double>(begin: 0.0, end: 0.85), weight: 20),
@@ -2067,14 +1895,9 @@ class _FocusCircleState extends State<_FocusCircle>
   }
 }
 
-// ── Scan progress card ──────────────────────────────────────────────────────
-
 class _ScanProgressCard extends StatelessWidget {
   final _ScanUiStage stage;
 
-  /// Which stages apply to the running mode, in display order — label mode
-  /// shows OCR/registry/classify; damage mode shows just the damage check;
-  /// Inspection Mode shows all four.
   final List<_ScanUiStage> stages;
 
   const _ScanProgressCard({required this.stage, required this.stages});

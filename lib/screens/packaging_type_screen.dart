@@ -9,13 +9,6 @@ import '../widgets/capture_tips.dart';
 import '../widgets/theme_toggle_button.dart';
 import 'camera_screen.dart';
 
-/// Remembers which packaging type was picked last, so a user working
-/// through a shelf of the same product form does not re-decide every time.
-///
-/// Stored as a one-line file in the app documents directory rather than in
-/// shared_preferences, since path_provider is already a dependency and this
-/// is a single value. A missing or unreadable file just means "no last
-/// choice" — it is a convenience, so it never blocks the screen.
 class _LastPackagingType {
   static const String _fileName = 'last_packaging_type.txt';
 
@@ -43,37 +36,13 @@ class _LastPackagingType {
       final file = await _file();
       await file.writeAsString(type.name);
     } catch (_) {
-      // Not worth surfacing — the next screen still opens correctly.
+
     }
   }
 }
 
-/// Lets the user pick which kind of packaging they're checking before the
-/// camera opens, for any flow that includes a damage step — standalone
-/// Damage Detection or Inspection Mode. Label-only scans skip this screen
-/// entirely since there's no packaging check to configure.
-///
-/// Only [PackagingType.box] has a real detection model wired up right now;
-/// [PackagingType.foil] and [PackagingType.bottle] are shown as "Coming
-/// soon" but are fully tappable — the capture flow and record storage work
-/// the same for all three, so a future model just needs to be registered in
-/// `packaging_damage_service.dart`.
-///
-/// Matches HomeScreen's card treatment: three cards that each size to their
-/// own text, in a scroll view. A line above them names which flow the user
-/// is in, since this screen otherwise looks identical whether it was
-/// reached from Damage Detection or Inspection Mode. Photo tips live behind
-/// the help icon in the app bar rather than taking up space on the screen.
-///
-/// Reached only via `Navigator.push` from the Homepage — never a
-/// permanently mounted tab — so unlike DashboardScreen/RecordsScreen, a
-/// `const` custom widget here is never at risk of going stale after a theme
-/// toggle: this whole screen is always freshly built after the current
-/// theme is already set, since the toggle itself only lives on the
-/// Homepage. `const _NotSureHelper()` and `const _PackagingGuideSheet()`
-/// below are left const on purpose for that reason.
 class PackagingTypeScreen extends StatefulWidget {
-  final CameraMode mode; // CameraMode.damage or CameraMode.inspection
+  final CameraMode mode;
 
   const PackagingTypeScreen({super.key, required this.mode});
 
@@ -97,8 +66,7 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
   }
 
   void _openCamera(BuildContext context, PackagingType type) {
-    // Recorded on the way out rather than after a successful save: the
-    // marker reflects what was last picked here, not what was last scanned.
+
     _LastPackagingType.write(type);
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -107,9 +75,6 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
     );
   }
 
-  /// Names the flow the user came in on. Inspection Mode reaches this screen
-  /// after the label step is already queued up, which is worth saying — the
-  /// two flows are otherwise indistinguishable from here.
   String get _flowText {
     switch (widget.mode) {
       case CameraMode.inspection:
@@ -117,38 +82,42 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
       case CameraMode.damage:
         return 'Damage Detection: packaging photos only.';
       case CameraMode.label:
-      // Label-only never routes here, but the switch has to be total.
+
         return 'Label check.';
     }
   }
-
-  IconData get _flowIcon => widget.mode == CameraMode.inspection
-      ? Icons.manage_search
-      : Icons.inventory_2_outlined;
-
-  Color get _flowColor => widget.mode == CameraMode.inspection
-      ? AppColors.inspection
-      : AppColors.damageKind;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        // Was `const Text(...)` — dropped since AppColors.text now varies
-        // with the theme toggle.
-        title: Text('What are you checking?',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppColors.text)),
-        backgroundColor: AppColors.surface,
+        backgroundColor: AppColors.bg,
         foregroundColor: AppColors.text,
         elevation: 0,
-        centerTitle: true,
+        scrolledUnderElevation: 0,
+        centerTitle: false,
+        titleSpacing: 4,
+        leadingWidth: 58,
+        toolbarHeight: 72,
+        leading: _backButton(context),
+
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('What are you checking?',
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.text)),
+            const SizedBox(height: 2),
+            Text(_flowText,
+                style: TextStyle(fontSize: 12, color: AppColors.muted)),
+          ],
+        ),
         actions: [
-          // Theme toggle here as well as on the Homepage, so switching does
-          // not require backing out of the flow.
+
           ThemeToggleButton(),
           IconButton(
             onPressed: () => showCaptureTips(context),
@@ -158,39 +127,57 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
             tooltip: 'Photo tips',
           ),
         ],
-        // Was `const Border(...)` — dropped since AppColors.border now
-        // varies with the theme toggle.
-        shape: Border(
-          bottom: BorderSide(color: AppColors.border, width: 0.6),
-        ),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            children: [
-              _FlowLine(
-                icon: _flowIcon,
-                color: _flowColor,
-                text: _flowText,
-                // Only worth saying once a highlight is actually on screen.
-                note: _lastUsed == null
-                    ? null
-                    : 'The highlighted card is what you checked last.',
-              ),
-              const SizedBox(height: 12),
-              for (final type in PackagingType.values) ...[
-                _PackagingCard(
-                  type: type,
-                  isLastUsed: type == _lastUsed,
-                  onTap: () => _openCamera(context, type),
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: Column(
+                  children: [
+
+                    if (_lastUsed != null) ...[
+                      const _HintBanner(
+                        text: 'The highlighted card is what you checked '
+                            'last.',
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    for (final type in PackagingType.values) ...[
+                      _PackagingCard(
+                        type: type,
+                        isLastUsed: type == _lastUsed,
+                        onTap: () => _openCamera(context, type),
+                      ),
+                      if (type != PackagingType.values.last)
+                        const SizedBox(height: 14),
+                    ],
+                  ],
                 ),
-                if (type != PackagingType.values.last)
-                  const SizedBox(height: 16),
-              ],
-              const SizedBox(height: 18),
-              const _NotSureHelper(),
-            ],
+              ),
+            ),
+
+            const _NotSureHelper(),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _backButton(BuildContext context) {
+    return Center(
+      child: Material(
+        color: AppColors.surface,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => Navigator.of(context).maybePop(),
+          child: SizedBox(
+            width: 38,
+            height: 38,
+            child: Icon(Icons.chevron_left, size: 24, color: AppColors.text),
           ),
         ),
       ),
@@ -198,67 +185,36 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
   }
 }
 
-/// One-line reminder of which scan the user started. Tinted to match the
-/// flow's colour on the Homepage cards, so the two read as the same thing.
-class _FlowLine extends StatelessWidget {
-  final IconData icon;
-  final Color color;
+class _HintBanner extends StatelessWidget {
   final String text;
 
-  /// Optional second line, dimmer than [text]. Used to explain the
-  /// last-used highlight, which is otherwise unlabelled decoration.
-  final String? note;
-
-  const _FlowLine({
-    required this.icon,
-    required this.color,
-    required this.text,
-    this.note,
-  });
+  const _HintBanner({required this.text});
 
   @override
   Widget build(BuildContext context) {
+    final color = AppColors.damageKind;
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.20)),
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 17),
+          Icon(Icons.info_outline, color: color, size: 18),
           const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  text,
-                  // Was `const TextStyle` — dropped since AppColors.text
-                  // now varies with the theme toggle.
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.text,
-                    height: 1.35,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (note != null) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    note!,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: AppColors.muted,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-              ],
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: AppColors.text,
+                height: 1.4,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],
@@ -278,8 +234,6 @@ class _PackagingCard extends StatelessWidget {
     required this.onTap,
   });
 
-  // Kept short on purpose — each card is only as tall as its own text, so
-  // a long paragraph here makes one card visibly taller than the others.
   String get _description {
     switch (type) {
       case PackagingType.box:
@@ -296,103 +250,103 @@ class _PackagingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Card height follows its content — the cards no longer split the
-    // screen evenly, so a short description gives a short card.
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(16),
-          // The order of the three cards never changes, so the last-used
-          // one is marked in place rather than moved to the top — a picker
-          // that reorders itself makes the choice harder, not easier.
-          border: isLastUsed
-              ? Border.all(color: AppColors.accent.withValues(alpha: 0.45))
-              : null,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: AppColors.damageKind.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child:
-                  Icon(type.icon, color: AppColors.damageKind, size: 22),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    type.label,
-                    // Was `const TextStyle` — dropped since AppColors.text
-                    // now varies with the theme toggle.
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.text,
-                      height: 1.1,
-                    ),
-                  ),
-                ),
-                Icon(Icons.chevron_right,
-                    color: AppColors.accentLight, size: 20),
-              ],
+
+    final ready = type.hasModel;
+    final tint = ready ? AppColors.damageKind : AppColors.muted;
+
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+
+            border: Border.all(
+              color: isLastUsed ? AppColors.accent : AppColors.border,
+              width: isLastUsed ? 1.4 : 0.8,
             ),
-            if (isLastUsed || !type.hasModel) ...[
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
                 children: [
-                  if (isLastUsed)
-                    _Pill(
-                      text: 'Last used',
-                      color: AppColors.accent,
-                      background: AppColors.accent.withValues(alpha: 0.10),
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: tint.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                  if (!type.hasModel)
-                  // Was `const _Pill(...)` — this one is a genuine
-                  // compile error once AppColors stops being const, not
-                  // just a staleness risk: `color`/`background` here are
-                  // constructor *arguments*, and every argument to a
-                  // `const` constructor call must itself be a
-                  // compile-time constant.
-                    _Pill(
-                      text: 'Coming soon',
-                      color: AppColors.muted,
-                      background: AppColors.surfaceAlt,
+                    child: Icon(type.icon, color: tint, size: 22),
+                  ),
+                  const SizedBox(width: 12),
+
+                  Expanded(
+                    child: Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        Text(
+                          type.label,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: ready ? AppColors.text : AppColors.muted,
+                          ),
+                        ),
+                        if (ready)
+                          _Pill(
+                            text: 'READY',
+                            color: AppColors.accent,
+                            background:
+                            AppColors.accent.withValues(alpha: 0.12),
+                          ),
+                        if (isLastUsed)
+                          _Pill(
+                            text: 'LAST USED',
+                            color: AppColors.inspection,
+                            background: AppColors.inspection
+                                .withValues(alpha: 0.12),
+                          ),
+                        if (!ready)
+
+                          _Pill(
+                            text: 'SOON',
+                            color: AppColors.muted,
+                            background: AppColors.surfaceAlt,
+                          ),
+                      ],
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
                 ],
               ),
-            ],
-            const SizedBox(height: 8),
-            Text(
-              _description,
-              style: TextStyle(
-                fontSize: 13,
-                color: AppColors.muted,
-                height: 1.35,
+              const SizedBox(height: 10),
+              Text(
+                _description,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.muted,
+                  height: 1.4,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// Small rounded label. Two can sit side by side on one card (a last-used
-/// Foil or Bottle shows both), which is why they live in a Wrap.
 class _Pill extends StatelessWidget {
   final String text;
   final Color color;
@@ -407,16 +361,17 @@ class _Pill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
         color: background,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         text,
         style: TextStyle(
           fontSize: 10,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.5,
           color: color,
         ),
       ),
@@ -424,9 +379,6 @@ class _Pill extends StatelessWidget {
   }
 }
 
-/// "Not sure which one?" — opens a short guide to picking a packaging type.
-/// Exists because the three labels are not as self-evident as they look: a
-/// bottle inside a carton fits two of them, and users currently just guess.
 class _NotSureHelper extends StatelessWidget {
   const _NotSureHelper();
 
@@ -471,9 +423,6 @@ class _NotSureHelper extends StatelessWidget {
 class _PackagingGuideSheet extends StatelessWidget {
   const _PackagingGuideSheet();
 
-  /// One rule per type, plus the two cases that actually confuse people.
-  /// Deliberately phrased around what the user is holding, not around what
-  /// the product is called.
   static const List<(PackagingType, String)> _rules = [
     (
     PackagingType.box,
@@ -512,8 +461,7 @@ class _PackagingGuideSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            // Was `const Text(...)` — dropped since AppColors.text now
-            // varies with the theme toggle.
+
             Text(
               'Which one am I holding?',
               style: TextStyle(
@@ -546,8 +494,7 @@ class _PackagingGuideSheet extends StatelessWidget {
                       children: [
                         Text(
                           _rules[i].$1.label,
-                          // Was `const TextStyle` — dropped since
-                          // AppColors.text now varies with the theme toggle.
+
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,

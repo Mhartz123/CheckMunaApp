@@ -21,8 +21,7 @@ class ResultScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Pushed route: listen to the theme controller directly so a
-    // toggle repaints this screen live, not just after reopening.
+
     return ListenableBuilder(
       listenable: ThemeController.instance,
       builder: (context, _) => _build(context),
@@ -52,7 +51,7 @@ class ResultScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Status badge — circular icon, centred ──────────────
+
                   Center(
                     child: Column(
                       children: [
@@ -91,7 +90,6 @@ class ResultScreen extends StatelessWidget {
 
                   const SizedBox(height: 20),
 
-                  // Why it's non-compliant / flagged — soft tinted card
                   if (!isCompliant && record.reasons.isNotEmpty)
                     Container(
                       width: double.infinity,
@@ -144,7 +142,6 @@ class ResultScreen extends StatelessWidget {
                   if (!isCompliant && record.reasons.isNotEmpty)
                     const SizedBox(height: 20),
 
-                  // ── Label details — one card, dividers between fields ──
                   if (record.hasLabelData) ...[
                     Container(
                       width: double.infinity,
@@ -172,44 +169,43 @@ class ResultScreen extends StatelessWidget {
                     const SizedBox(height: 24),
                   ],
 
-                  // ── Packaging / damage — hidden for a label-only scan ──                if (record.hasDamageData) ...[
-                  if (record.hasLabelData) const Divider(height: 1),
-                  if (record.hasLabelData) const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Text('Packaging / damage',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.text)),
-                      if (record.packagingType != null) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceAlt,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            record.packagingType!.label,
+                  if (record.hasDamageData) ...[
+                    if (record.hasLabelData) const Divider(height: 1),
+                    if (record.hasLabelData) const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Text('Packaging / damage',
                             style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.muted,
+                                fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.text)),
+                        if (record.packagingType != null) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceAlt,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              record.packagingType!.label,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.muted,
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _DamageSection(damage: record.damageCheck),
-                ],
+                    ),
+                    const SizedBox(height: 8),
+                    _DamageSection(damage: record.damageCheck),
+                  ],
                 ],
               ),
             ),
           ),
 
-          // Scan again button — fixed footer
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             child: SizedBox(
@@ -235,10 +231,6 @@ class ResultScreen extends StatelessWidget {
     );
   }
 
-  /// One field row inside the details card: a small muted label over its
-  /// value. [emphasize] bolds the value (used for the product name);
-  /// [boxed] wraps the value in a subtle fill (used for the ingredient
-  /// list, which can run long).
   Widget _cardField(String label, String value,
       {bool emphasize = false, bool boxed = false}) {
     return Padding(
@@ -277,12 +269,6 @@ class ResultScreen extends StatelessWidget {
   }
 }
 
-/// Packaging damage result, from whichever `PackagingDamageDetector` handled
-/// the chosen [PackagingType] (see `packaging_damage_service.dart`).
-/// [DamageCheckResult.available] is false when the check couldn't run —
-/// offline/backend unreachable for a live model, no model wired up yet for
-/// this packaging type, or (for a label-only scan) simply never run — shown
-/// as a neutral "unavailable" state distinct from a clean "no damage" pass.
 class _DamageSection extends StatelessWidget {
   final DamageCheckResult damage;
 

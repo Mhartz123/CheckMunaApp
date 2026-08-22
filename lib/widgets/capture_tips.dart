@@ -1,14 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
-/// Photo tips, shown on demand from a help icon rather than taking up
-/// permanent space on the screen. Worded for pharmacy staff and shoppers
-/// rather than developers, so there is no mention of models, confidence,
-/// or detection classes here.
-///
-/// Opened with [showCaptureTips]. Because it is a sheet and not a strip of
-/// text competing with the cards behind it, the tips can be a little fuller
-/// than they were inline.
 const List<(IconData, String)> _tips = [
   (
   Icons.wb_sunny_outlined,
@@ -34,11 +26,14 @@ const List<(IconData, String)> _tips = [
   ),
 ];
 
-/// Slides the tips up from the bottom. Safe to call from any screen.
 Future<void> showCaptureTips(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: AppColors.surface,
+    isScrollControlled: true,
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.of(context).size.height * 0.85,
+    ),
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
@@ -52,13 +47,13 @@ class _CaptureTipsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Grab handle
+
             Center(
               child: Container(
                 width: 36,
