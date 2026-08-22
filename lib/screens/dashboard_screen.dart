@@ -61,6 +61,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<_RecentScan> _recent = [];
   bool _loadingRecent = true;
 
+  // Totals across ALL saved records, for the summary card. Computed in the
+  // same pass that picks the recent few, so there's no second directory walk.
+  int _totalScans = 0;
+  int _compliantCount = 0;
+  int _flaggedCount = 0; // non-compliant + banned
+
   @override
   void initState() {
     super.initState();
@@ -84,15 +90,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }).toList()
         ..sort((a, b) => b.date.compareTo(a.date));
 
+      // Tally every readable record for the summary card.
+      var total = 0, compliant = 0, flagged = 0;
+      for (final s in scans) {
+        final r = s.record;
+        if (r == null) continue; // unreadable: counts toward nothing
+        total++;
+        switch (r.status) {
+          case ComplianceStatus.compliant:
+            compliant++;
+            break;
+          case ComplianceStatus.nonCompliant:
+          case ComplianceStatus.banned:
+            flagged++;
+            break;
+        }
+      }
+
       if (!mounted) return;
       setState(() {
         _recent = scans.take(_maxRecent).toList();
+        _totalScans = total;
+        _compliantCount = compliant;
+        _flaggedCount = flagged;
         _loadingRecent = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _recent = [];
+        _totalScans = 0;
+        _compliantCount = 0;
+        _flaggedCount = 0;
         _loadingRecent = false;
       });
     }
@@ -124,10 +153,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             // ── Header — same bar treatment as Records/News ──────────
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 12),
-              // Was `const BoxDecoration` — dropped since AppColors.surface
-              // / .border now vary with the theme toggle.
+              height: 56, // matches Records' AppBar toolbarHeight exactly
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              alignment: Alignment.centerLeft,
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border(
@@ -185,46 +213,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // ── Scan options — each card sizes to its own content ──────
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
                 child: Column(
                   children: [
+                    // Summary card — today's tallies across all records.
+                    _SummaryCard(
+                      scans: _totalScans,
+                      compliant: _compliantCount,
+                      flagged: _flaggedCount,
+                      loading: _loadingRecent,
+                    ),
+                    const SizedBox(height: 16),
                     _DashboardCard(
                       icon: Icons.list_alt_outlined,
                       iconColor: AppColors.labelKind,
                       title: 'Check Labels',
-                      description:
-                      'Scan a label\'s front, expiration date, and '
-                          'ingredients. We check it against the FDA '
-                          'registry and flag expired, unregistered, or '
-                          'missing info.',
+                      subtitle: 'Verify against FDA registry',
                       onTap: () => _openLabelCamera(context),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     _DashboardCard(
                       icon: Icons.inventory_2_outlined,
                       iconColor: AppColors.damageKind,
                       title: 'Damage Detection',
-                      description:
-                      'Pick a packaging type — Box, Foil, or Bottle — '
-                          'then photograph it from multiple angles. '
-                          'On-device detection scans for dents or '
-                          'scratches, no internet needed.',
+                      subtitle: 'Check packaging integrity',
                       onTap: () =>
                           _openPackagingPicker(context, CameraMode.damage),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     _DashboardCard(
                       icon: Icons.manage_search,
                       iconColor: AppColors.inspection,
                       title: 'Inspection Mode',
-                      description:
-                      'Run both checks in one scan — verify the label '
-                          'against the FDA registry, then photograph the '
-                          'packaging for damage. Get one combined result.',
+                      subtitle: 'Combined label + damage result',
                       onTap: () => _openPackagingPicker(
                           context, CameraMode.inspection),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 20),
                     _RecentScansStrip(
                       scans: _recent,
                       loading: _loadingRecent,
@@ -243,78 +268,174 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+/// The green summary card at the top of Home: today's tallies (Scans /
+/// Compliant / Flagged) across all saved records. Uses the accent gradient
+/// so it reads as the primary status surface, matching the mockup.
+class _SummaryCard extends StatelessWidget {
+  final int scans;
+  final int compliant;
+  final int flagged;
+  final bool loading;
+
+  const _SummaryCard({
+    required this.scans,
+    required this.compliant,
+    required this.flagged,
+    required this.loading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.accent, AppColors.accentLight],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'TODAY',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.85),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.0,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _stat(loading ? '—' : '$scans', 'Scans'),
+              _divider(),
+              _stat(loading ? '—' : '$compliant', 'Compliant'),
+              _divider(),
+              _stat(loading ? '—' : '$flagged', 'Flagged'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stat(String value, String label) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.9),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _divider() {
+    return Container(
+      width: 1,
+      height: 34,
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      color: Colors.white.withValues(alpha: 0.25),
+    );
+  }
+}
+
+/// Compact action row — small icon tile, title + one-line subtitle, chevron.
+/// Replaces the earlier tall card with a paragraph description; the Clean
+/// Clinical direction reads as precise rather than bloated, and the shorter
+/// rows leave room for the summary card above.
 class _DashboardCard extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
   final String title;
-  final String description;
+  final String subtitle;
   final VoidCallback onTap;
 
   const _DashboardCard({
     required this.icon,
     required this.iconColor,
     required this.title,
-    required this.description,
+    required this.subtitle,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Card height follows its content — no Expanded, so a short
-    // description gives a short card.
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: iconColor.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(icon, color: iconColor, size: 22),
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: iconColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    // Was `const TextStyle` — dropped since AppColors.text
-                    // now varies with the theme toggle.
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.text,
-                      height: 1.1,
-                    ),
-                  ),
-                ),
-                Icon(Icons.chevron_right,
-                    color: AppColors.accentLight, size: 20),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              description,
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.muted,
-                height: 1.35,
+                child: Icon(icon, color: iconColor, size: 20),
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.text,
+                        height: 1.15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: AppColors.muted,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.chevron_right,
+                  color: AppColors.accentLight, size: 20),
+            ],
+          ),
         ),
       ),
     );

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
+import '../services/theme_controller.dart';
 
 class ResultScreen extends StatelessWidget {
   final ScanRecord record;
@@ -20,16 +21,28 @@ class ResultScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Pushed route: listen to the theme controller directly so a
+    // toggle repaints this screen live, not just after reopening.
+    return ListenableBuilder(
+      listenable: ThemeController.instance,
+      builder: (context, _) => _build(context),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     final isCompliant = record.status == ComplianceStatus.compliant;
     final isBanned = record.status == ComplianceStatus.banned;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.bg,
       appBar: AppBar(
-        title: Text(_title),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        title: Text(_title,
+            style: TextStyle(
+                fontWeight: FontWeight.w600, color: AppColors.text)),
+        backgroundColor: AppColors.bg,
+        foregroundColor: AppColors.text,
         elevation: 0,
+        centerTitle: false,
       ),
       body: Column(
         children: [
@@ -39,33 +52,37 @@ class ResultScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Label compliance',
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 14)),
-                  const SizedBox(height: 8),
-                  // Status badge
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 20),
-                    decoration: BoxDecoration(
-                      color: record.statusColor,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                  // ── Status badge — circular icon, centred ──────────────
+                  Center(
                     child: Column(
                       children: [
-                        Icon(
-                          record.statusIcon,
-                          color: Colors.white,
-                          size: 48,
+                        Container(
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: record.statusColor,
+                          ),
+                          child: Icon(record.statusIcon,
+                              color: Colors.white, size: 34),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 12),
+                        Text(
+                          'LABEL COMPLIANCE',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.0,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
                         Text(
                           record.statusLabel,
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
-                            letterSpacing: 1.2,
+                            color: record.statusColor,
                           ),
                         ),
                       ],
@@ -74,7 +91,7 @@ class ResultScreen extends StatelessWidget {
 
                   const SizedBox(height: 20),
 
-                  // Why it's non-compliant / flagged
+                  // Why it's non-compliant / flagged — soft tinted card
                   if (!isCompliant && record.reasons.isNotEmpty)
                     Container(
                       width: double.infinity,
@@ -83,7 +100,7 @@ class ResultScreen extends StatelessWidget {
                         color: isBanned
                             ? AppColors.bannedBg
                             : AppColors.nonCompliantBg,
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(14),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -117,7 +134,8 @@ class ResultScreen extends StatelessWidget {
                             Padding(
                               padding: const EdgeInsets.only(bottom: 4),
                               child: Text('•  $reason',
-                                  style: const TextStyle(fontSize: 13)),
+                                  style: TextStyle(
+                                      fontSize: 13, color: AppColors.text)),
                             ),
                         ],
                       ),
@@ -126,75 +144,66 @@ class ResultScreen extends StatelessWidget {
                   if (!isCompliant && record.reasons.isNotEmpty)
                     const SizedBox(height: 20),
 
-                  // ── Label details — hidden for a damage-only scan ─────
+                  // ── Label details — one card, dividers between fields ──
                   if (record.hasLabelData) ...[
-                    Text('PRODUCT',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.muted)),
-                    const SizedBox(height: 2),
-                    Text(record.productName,
-                        style: const TextStyle(
-                            fontSize: 17, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 10),
-                    _labeledField('EXPIRATION', record.expiration),
-
-                    const SizedBox(height: 20),
-
-                    // Ingredient list
-                    const Text('Ingredient list',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 14)),
-                    const SizedBox(height: 6),
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(8),
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border:
+                        Border.all(color: AppColors.border, width: 0.6),
                       ),
-                      child: Text(
-                        record.ingredients,
-                        style: const TextStyle(fontSize: 13),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _cardField('PRODUCT', record.productName,
+                              emphasize: true),
+                          Divider(
+                              height: 1, color: AppColors.border),
+                          _cardField('EXPIRATION', record.expiration),
+                          Divider(
+                              height: 1, color: AppColors.border),
+                          _cardField('INGREDIENT LIST', record.ingredients,
+                              boxed: true),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 24),
                   ],
 
-                  // ── Packaging / damage — hidden for a label-only scan ──
-                  if (record.hasDamageData) ...[
-                    if (record.hasLabelData) const Divider(height: 1),
-                    if (record.hasLabelData) const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        const Text('Packaging / damage',
+                  // ── Packaging / damage — hidden for a label-only scan ──                if (record.hasDamageData) ...[
+                  if (record.hasLabelData) const Divider(height: 1),
+                  if (record.hasLabelData) const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Text('Packaging / damage',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.text)),
+                      if (record.packagingType != null) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceAlt,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            record.packagingType!.label,
                             style: TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 14)),
-                        if (record.packagingType != null) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              record.packagingType!.label,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.muted,
-                              ),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.muted,
                             ),
                           ),
-                        ],
+                        ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    _DamageSection(damage: record.damageCheck),
-                  ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _DamageSection(damage: record.damageCheck),
+                ],
                 ],
               ),
             ),
@@ -205,18 +214,19 @@ class ResultScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             child: SizedBox(
               width: double.infinity,
-              child: ElevatedButton(
+              child: ElevatedButton.icon(
                 onPressed: () => Navigator.of(context).pop(),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF4CAF50),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                child: const Text('Scan Again',
+                icon: const Icon(Icons.refresh, size: 20),
+                label: const Text('Scan Again',
                     style: TextStyle(
                         fontSize: 16, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF15916B),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 15),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
               ),
             ),
           ),
@@ -225,18 +235,44 @@ class ResultScreen extends StatelessWidget {
     );
   }
 
-  Widget _labeledField(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.muted)),
-        const SizedBox(height: 2),
-        Text(value, style: const TextStyle(fontSize: 13.5)),
-      ],
+  /// One field row inside the details card: a small muted label over its
+  /// value. [emphasize] bolds the value (used for the product name);
+  /// [boxed] wraps the value in a subtle fill (used for the ingredient
+  /// list, which can run long).
+  Widget _cardField(String label, String value,
+      {bool emphasize = false, bool boxed = false}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                  color: AppColors.muted)),
+          const SizedBox(height: 4),
+          if (boxed)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceAlt,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(value,
+                  style: TextStyle(fontSize: 13, color: AppColors.text)),
+            )
+          else
+            Text(value,
+                style: TextStyle(
+                    fontSize: emphasize ? 16 : 13.5,
+                    fontWeight:
+                    emphasize ? FontWeight.bold : FontWeight.normal,
+                    color: AppColors.text)),
+        ],
+      ),
     );
   }
 }

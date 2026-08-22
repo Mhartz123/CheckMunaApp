@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
+import '../services/theme_controller.dart';
 
 class RecordDetailScreen extends StatefulWidget {
   final Directory recordDir;
@@ -43,21 +44,36 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Pushed route: listen to the theme controller directly so a
+    // toggle repaints this screen live, not just after reopening.
+    return ListenableBuilder(
+      listenable: ThemeController.instance,
+      builder: (context, _) => _build(context),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     final name = p.basename(widget.recordDir.path);
     final record = _record;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Compliance Check',
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 1,
+        title: Text('Compliance Check',
+            style: TextStyle(
+                fontWeight: FontWeight.bold, color: AppColors.text)),
+        backgroundColor: AppColors.surface,
+        foregroundColor: AppColors.text,
+        elevation: 0,
         centerTitle: true,
+        shape: Border(
+          bottom: BorderSide(color: AppColors.border, width: 0.6),
+        ),
       ),
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.bg,
       body: record == null
-          ? const Center(child: Text('Record data not found.'))
+          ? Center(
+          child: Text('Record data not found.',
+              style: TextStyle(color: AppColors.text)))
           : SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -72,9 +88,9 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                     ? Container(
                   width: double.infinity,
                   height: 240,
-                  color: Colors.grey.shade200,
+                  color: AppColors.surfaceAlt,
                   child: Icon(Icons.image_not_supported_outlined,
-                      color: Colors.grey.shade400, size: 48),
+                      color: AppColors.muted, size: 48),
                 )
                     : Image.file(_photos[_mainPhotoIndex],
                     width: double.infinity, height: 240, fit: BoxFit.cover),
@@ -120,9 +136,9 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.grey.shade100,
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: AppColors.border),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -162,7 +178,8 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                             color: AppColors.muted)),
                     const SizedBox(height: 4),
                     Text(record.ingredients,
-                        style: const TextStyle(fontSize: 13)),
+                        style: TextStyle(
+                            fontSize: 13, color: AppColors.text)),
                     const Divider(height: 20),
                   ],
 
@@ -208,9 +225,9 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
               padding: const EdgeInsets.symmetric(
                   horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.grey.shade100,
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: AppColors.border),
               ),
               child: Text(
                 'FDA Hotline : ${record.status == ComplianceStatus.compliant ? 'XXX-XXXX-XXX' : 'XXX-XXXX-XXX'}',
@@ -218,7 +235,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
                   color: record.status == ComplianceStatus.compliant
-                      ? Colors.black87
+                      ? AppColors.text
                       : const Color(0xFFE57373),
                 ),
               ),
@@ -230,7 +247,8 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   }
 
   Widget _row(String label, String value) {
-    return Text('$label : $value', style: const TextStyle(fontSize: 13));
+    return Text('$label : $value',
+        style: TextStyle(fontSize: 13, color: AppColors.text));
   }
 
   Widget _damageBlock(ScanRecord record) {
@@ -253,9 +271,9 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

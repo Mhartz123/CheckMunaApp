@@ -369,12 +369,21 @@ class RecordsScreenState extends State<RecordsScreen> {
       appBar: AppBar(
         // Was `const Text(...)` — dropped since AppColors.text now varies
         // with the theme toggle.
+        // Left-aligned and 15px to match Home's 'CheckMuna' title, so the
+        // header row doesn't shift when switching tabs.
+        titleSpacing: 16,
         title: Text('Records',
-            style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.text)),
+            style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: AppColors.text)),
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
         elevation: 0,
-        centerTitle: true,
+        centerTitle: false,
+        // Pinned to match Home's custom header height (32px logo + 12*2
+        // padding = 56), so switching tabs shows no vertical shift.
+        toolbarHeight: 56,
         // Was `const Border(...)` — dropped since AppColors.border now
         // varies with the theme toggle.
         shape: Border(
@@ -386,10 +395,36 @@ class RecordsScreenState extends State<RecordsScreen> {
           // stays mounted, and an identical const instance is what makes
           // Flutter skip the rebuild that re-reads AppColors.
           ThemeToggleButton(),
-          IconButton(
-            icon: const Icon(Icons.picture_as_pdf_outlined),
-            tooltip: 'Generate Report',
-            onPressed: _generateReport,
+          // PDF export as a labelled green pill (Clean Clinical mockup) rather
+          // than a bare icon, so the primary export action reads clearly.
+          Padding(
+            padding: const EdgeInsets.only(right: 10, top: 8, bottom: 8),
+            child: Material(
+              color: AppColors.accent,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: _generateReport,
+                borderRadius: BorderRadius.circular(10),
+                child: const Padding(
+                  padding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.picture_as_pdf_outlined,
+                          color: Colors.white, size: 16),
+                      SizedBox(width: 6),
+                      Text('PDF',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          )),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -587,55 +622,75 @@ class RecordsScreenState extends State<RecordsScreen> {
             ),
           ),
 
-          // Multi-select bottom bar
-          if (_isSelecting)
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 12),
-              // Was `const BoxDecoration(...)` — dropped since
-              // AppColors.surface/.border now vary with the theme toggle.
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                border: Border(top: BorderSide(color: AppColors.border, width: 0.6)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  TextButton.icon(
-                    onPressed: _selectAll,
-                    // Was `const Icon(...)` — dropped since AppColors.muted
-                    // now varies with the theme toggle.
-                    icon: Icon(Icons.select_all, color: AppColors.muted),
-                    // Was `const Text(...)` — dropped since AppColors.muted
-                    // now varies with the theme toggle.
-                    label: Text('Select All',
-                        style: TextStyle(color: AppColors.muted)),
+          // Multi-select bottom bar — always in the tree, slid down and
+          // faded out when not selecting, so it animates up into place when
+          // selection starts instead of popping in.
+          // AnimatedSize collapses the reserved height when hidden (the bar
+          // is always mounted for the slide animation, so without this it
+          // would leave a permanent empty strip below the list).
+          AnimatedSize(
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: !_isSelecting
+                ? const SizedBox(width: double.infinity)
+                : AnimatedSlide(
+              offset: _isSelecting ? Offset.zero : const Offset(0, 1),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              child: AnimatedOpacity(
+                opacity: _isSelecting ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    border: Border(
+                        top: BorderSide(
+                            color: AppColors.border, width: 0.6)),
                   ),
-                  TextButton.icon(
-                    onPressed: _unselectAll,
-                    // Was `const Icon(...)` — dropped since AppColors.muted
-                    // now varies with the theme toggle.
-                    icon: Icon(Icons.check_box_outline_blank,
-                        color: AppColors.muted),
-                    // Was `const Text(...)` — dropped since AppColors.muted
-                    // now varies with the theme toggle.
-                    label: Text('Unselect All',
-                        style: TextStyle(color: AppColors.muted)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      TextButton.icon(
+                        onPressed: _selectAll,
+                        // Was `const Icon(...)` — dropped since AppColors.muted
+                        // now varies with the theme toggle.
+                        icon: Icon(Icons.select_all, color: AppColors.muted),
+                        // Was `const Text(...)` — dropped since AppColors.muted
+                        // now varies with the theme toggle.
+                        label: Text('Select All',
+                            style: TextStyle(color: AppColors.muted)),
+                      ),
+                      TextButton.icon(
+                        onPressed: _unselectAll,
+                        // Was `const Icon(...)` — dropped since AppColors.muted
+                        // now varies with the theme toggle.
+                        icon: Icon(Icons.check_box_outline_blank,
+                            color: AppColors.muted),
+                        // Was `const Text(...)` — dropped since AppColors.muted
+                        // now varies with the theme toggle.
+                        label: Text('Unselect All',
+                            style: TextStyle(color: AppColors.muted)),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: _confirmMultiDelete,
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        label: const Text('Delete All',
+                            style: TextStyle(color: Colors.white)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.bannedText,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ],
                   ),
-                  ElevatedButton.icon(
-                    onPressed: _confirmMultiDelete,
-                    icon: const Icon(Icons.close, color: Colors.white),
-                    label: const Text('Delete All',
-                        style: TextStyle(color: Colors.white)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.bannedText,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -860,27 +915,31 @@ class _RecordCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(width: 6),
-                        // Delete button
+                        const SizedBox(width: 8),
+                        // Delete button — slightly enlarged tap target.
                         GestureDetector(
                           onTap: onDelete,
                           child: Container(
-                            padding: const EdgeInsets.all(4),
+                            width: 28,
+                            height: 28,
+                            alignment: Alignment.center,
                             decoration: BoxDecoration(
                               color: AppColors.bannedBg,
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(8),
                             ),
                             child: Icon(Icons.close,
-                                color: AppColors.bannedText, size: 14),
+                                color: AppColors.bannedText, size: 16),
                           ),
                         ),
-                        const SizedBox(width: 6),
-                        // Multi-select checkbox
+                        // Wider gap between the two controls so they're not
+                        // easily mis-tapped.
+                        const SizedBox(width: 10),
+                        // Multi-select circle — sized to match delete.
                         GestureDetector(
                           onTap: onSelect,
                           child: Container(
-                            width: 20,
-                            height: 20,
+                            width: 26,
+                            height: 26,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
@@ -891,7 +950,7 @@ class _RecordCard extends StatelessWidget {
                             ),
                             child: isSelected
                                 ? const Icon(Icons.check,
-                                size: 12, color: Colors.white)
+                                size: 15, color: Colors.white)
                                 : null,
                           ),
                         ),
