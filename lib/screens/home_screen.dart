@@ -110,7 +110,7 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.fact_check_outlined,
                       title: 'Read the result',
                       description:
-                      'After the last shot the app analyses on its own — no button to press. It shows Compliant, Non-Compliant, or Banned, with the reasons behind the verdict.',
+                      'After the last shot the app analyses on its own — no button to press. It shows Compliant, Non-Compliant, or Warning, with the reasons behind the verdict.',
                     ),
                     _Step(
                       number: '5',
@@ -179,9 +179,9 @@ class HomeScreen extends StatelessWidget {
                     ),
                     _ComplianceLegendItem(
                       color: const Color(0xFFE57373),
-                      label: 'Banned / Warning',
+                      label: 'Warning',
                       description:
-                      'Product is banned by the FDA. Dangerous to consume. Report immediately to the local FDA hotline.',
+                      'The product matched an FDA advisory. Needs manual verification — confirm its status with the local FDA hotline before sale or use.',
                     ),
                     const SizedBox(height: 24),
 

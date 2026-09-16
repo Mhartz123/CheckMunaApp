@@ -11,11 +11,13 @@ import 'packaging_damage_service.dart';
 /// Three independent scan flows (see CameraScreen's `CameraMode`), each
 /// producing its own [ScanRecord]:
 ///
-///  • [analyzeLabel] — label-only. **Banned (warned):** the product name is
-///    checked against the FDA advisory/banned list — [FdaDatasetChecker]
-///    (word-overlap + fuzzy), with [OnnxSemanticMatcher] as a removable
-///    last-ditch tier when the name OCR was low-confidence. A hit here (and
-///    only here) means banned. **Otherwise non-compliant if any of:** the
+///  • [analyzeLabel] — label-only. **Warning:** the product name is checked
+///    against the FDA advisory list — [FdaDatasetChecker] (word-overlap +
+///    fuzzy), with [OnnxSemanticMatcher] as a removable last-ditch tier when
+///    the name OCR was low-confidence. A hit here (and only here) routes to
+///    [ComplianceStatus.warning] — deliberately not non-compliant, since an
+///    advisory match flags the product for manual verification rather than
+///    deciding it. **Otherwise non-compliant if any of:** the
 ///    printed expiration date has passed (expired); the user verified no
 ///    expiration date is printed on the packaging; no ingredient list was
 ///    detected, or the user verified none is printed on the packaging.
@@ -24,24 +26,24 @@ import 'packaging_damage_service.dart';
 ///  • [analyzeDamage] — damage-only. Runs whichever [PackagingDamageDetector]
 ///    is registered for the given [PackagingType] (see
 ///    `packaging_damage_service.dart`). **Non-compliant** if it reports
-///    severe damage (≥ [_damageConfidenceThreshold]) or scratches.
+///    damage at or above [_damageConfidenceThreshold].
 ///    **Compliant** otherwise — including when the detector isn't available
 ///    (e.g. a packaging type with no model yet), since there's nothing to
 ///    flag.
 ///
 ///  • [analyzeInspection] — Inspection Mode: runs both checks above in one
-///    scan and combines them into a single verdict (banned name overrides
-///    everything; otherwise non-compliant if any label check OR the damage
+///    scan and combines them into a single verdict (an advisory-matched name
+///    overrides everything; otherwise non-compliant if any label check OR the damage
 ///    check fails; compliant only if everything passes).
 ///
 /// UI, storage, and report submission consume [ScanRecord] only.
 enum ScanStage { matchingRegistry, classifying, checkingDamage }
 
 class ComplianceEngine {
-  /// The ONNX semantic matcher — removable last-ditch tier of the banned-name
-  /// check. Runs only when the product-name OCR was unreliable and the dataset
-  /// tier found no confident match; a hit against the FDA *warned* index means
-  /// banned.
+  /// The ONNX semantic matcher — removable last-ditch tier of the advisory
+  /// name check. Runs only when the product-name OCR was unreliable and the dataset
+  /// tier found no confident match; a hit against the FDA *warned* index
+  /// routes the scan to [ComplianceStatus.warning].
   ///
   /// DISABLED, and not merely as a precaution — this was observed happening.
   ///
@@ -49,7 +51,7 @@ class ComplianceEngine {
   /// cosine ~0.99), so nearly any query matches something in the FDA *warned*
   /// index. On a real MX3 Coffee Mix scan the front-label OCR came back as
   /// "LE NT DNE*", which is low-confidence enough to open this tier, and the
-  /// tier then returned a match and the product was reported BANNED.
+  /// tier then returned a match and the product was flagged.
   ///
   /// The last-ditch gate was supposed to keep the blast radius small. It does
   /// not: the gate opens precisely when the product name was read badly, which
@@ -64,8 +66,14 @@ class ComplianceEngine {
   /// which the name is treated as unreliable, opening the semantic fallback.
   static const double _lowOcrConfidenceThreshold = 0.6;
 
-  /// Minimum damage-detection confidence (0..1) for "severe" packaging damage
-  /// to count as non-compliant. Scratches fail regardless of confidence.
+  /// Minimum damage-detection confidence (0..1) for packaging damage to
+  /// count as non-compliant. This is the single gate: every damage class the
+  /// shipped models emit is judged on confidence alone.
+  ///
+  /// Note this sits ABOVE each detector's own `confThreshold` (0.25–0.35, see
+  /// `damage_detection_service.dart`): the detector decides what counts as a
+  /// detection worth drawing on the photo, and this decides what counts as
+  /// bad enough to fail the scan.
   static const double _damageConfidenceThreshold = 0.70;
 
   /// Kicks off the model + FDA dataset asset loads early (e.g. from
@@ -116,8 +124,8 @@ class ComplianceEngine {
       onStageChange: onStageChange,
     );
 
-    final ComplianceStatus status = s.banned
-        ? ComplianceStatus.banned
+    final ComplianceStatus status = s.advisoryFlagged
+        ? ComplianceStatus.warning
         : (s.expired ||
         s.expirationMissing ||
         s.expirationUnreadable ||
@@ -207,8 +215,8 @@ class ComplianceEngine {
     await _computeDamage(packagingType, boxPhotoPaths, onStageChange);
     final bool damageFails = _damageFails(damage);
 
-    final ComplianceStatus status = s.banned
-        ? ComplianceStatus.banned
+    final ComplianceStatus status = s.advisoryFlagged
+        ? ComplianceStatus.warning
         : (s.expired ||
         s.expirationMissing ||
         s.expirationUnreadable ||
@@ -236,7 +244,7 @@ class ComplianceEngine {
     return ScanRecord(
       kind: ScanKind.both,
       status: status,
-      matchedKeyword: s.banned
+      matchedKeyword: s.advisoryFlagged
           ? _matchedLabelKeyword(s)
           : (tags.isEmpty ? '—' : tags.join(', ')),
       reasons: reasons,
@@ -316,7 +324,7 @@ class ComplianceEngine {
       fields: fields,
       advisoryMatch: advisoryMatch,
       semanticMatch: semanticMatch,
-      banned: advisoryMatch != null || semanticMatch != null,
+      advisoryFlagged: advisoryMatch != null || semanticMatch != null,
       expired: expired,
       expirationMissing: expirationDeclaredMissing,
       expirationUnreadable: expirationUnreadable,
@@ -349,14 +357,18 @@ class ComplianceEngine {
   static bool _damageFails(DamageCheckResult damage) =>
       damage.available &&
           damage.isDamaged &&
-          (damage.maxConfidence >= _damageConfidenceThreshold ||
-              damage.hasScratch);
+          damage.maxConfidence >= _damageConfidenceThreshold;
 
+  /// Names what the detector found and how sure it was, e.g.
+  /// "Packaging damage — Structural deformation detected (84% confidence)."
+  /// Falls back to the generic wording for records with no class list.
   static String _damageReason(DamageCheckResult damage) {
-    final detail = damage.hasScratch
-        ? 'scratches detected'
-        : 'severe damage detected '
+    final confidence =
         '(${(damage.maxConfidence * 100).toStringAsFixed(0)}% confidence)';
+    final classes = damage.detections.toSet().toList();
+    final detail = classes.isEmpty
+        ? 'severe damage detected $confidence'
+        : '${classes.join(', ')} detected $confidence';
     return 'Packaging damage — $detail.';
   }
 
@@ -401,7 +413,7 @@ class ComplianceEngine {
   }) {
     if (status == ComplianceStatus.compliant) return const [];
 
-    if (status == ComplianceStatus.banned) {
+    if (status == ComplianceStatus.warning) {
       if (s.advisoryMatch != null) {
         return [
           'Matches FDA ${s.advisoryMatch!.advisoryNumber} (${s.advisoryMatch!.category}): '
@@ -448,7 +460,7 @@ class _LabelSignals {
   final LabelFields fields;
   final FdaAdvisoryMatch? advisoryMatch;
   final SemanticMatch? semanticMatch;
-  final bool banned;
+  final bool advisoryFlagged;
   final bool expired;
   final bool expirationMissing;
 
@@ -463,7 +475,7 @@ class _LabelSignals {
     required this.fields,
     required this.advisoryMatch,
     required this.semanticMatch,
-    required this.banned,
+    required this.advisoryFlagged,
     required this.expired,
     required this.expirationMissing,
     this.expirationUnreadable = false,

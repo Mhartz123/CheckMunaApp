@@ -15,6 +15,11 @@ class ReportBuilder {
   static const _greenBg = PdfColor.fromInt(0xFFE8F5E9);
   static const _amber = PdfColor.fromInt(0xFFE65100);
   static const _amberBg = PdfColor.fromInt(0xFFFFF8E1);
+  /// Records here come straight from stored JSON as raw status strings, so
+  /// the warning check has to tolerate the pre-rename spellings too — see
+  /// [ScanRecord.isWarningLabel].
+  static bool _isWarning(String status) => ScanRecord.isWarningLabel(status);
+
   static const _red = PdfColor.fromInt(0xFFB71C1C);
   static const _redBg = PdfColor.fromInt(0xFFFFEBEE);
   static const _border = PdfColor.fromInt(0xFFC8E0CE);
@@ -236,12 +241,10 @@ class ReportBuilder {
         records.where((r) => r.status == 'COMPLIANT').length;
     final nonCompliant =
         records.where((r) => r.status == 'NON-COMPLIANT').length;
-    final banned =
-        records.where((r) => r.status == 'WARNING / BANNED').length;
+    final warning = records.where((r) => _isWarning(r.status)).length;
 
     final flagged = records
-        .where((r) =>
-    r.status == 'NON-COMPLIANT' || r.status == 'WARNING / BANNED')
+        .where((r) => r.status == 'NON-COMPLIANT' || _isWarning(r.status))
         .toList();
 
     // Common flag trigger frequency
@@ -271,7 +274,7 @@ class ReportBuilder {
           pw.SizedBox(height: 20),
           _sectionTitle('Overview'),
           pw.SizedBox(height: 8),
-          _overviewRow(total, compliant, nonCompliant, banned),
+          _overviewRow(total, compliant, nonCompliant, warning),
           pw.SizedBox(height: 20),
           _sectionTitle('Common Flag Triggers'),
           pw.SizedBox(height: 8),
@@ -396,7 +399,7 @@ class ReportBuilder {
   }
 
   static pw.Widget _overviewRow(
-      int total, int compliant, int nonCompliant, int banned) {
+      int total, int compliant, int nonCompliant, int warning) {
     return pw.Row(
       children: [
         _statBox('Total Scanned', '$total', _text, _bg),
@@ -405,7 +408,7 @@ class ReportBuilder {
         pw.SizedBox(width: 8),
         _statBox('Non-Compliant', '$nonCompliant', _amber, _amberBg),
         pw.SizedBox(width: 8),
-        _statBox('Banned', '$banned', _red, _redBg),
+        _statBox('Warning', '$warning', _red, _redBg),
       ],
     );
   }
@@ -494,15 +497,14 @@ class ReportBuilder {
           ],
         ),
         ...records.map((r) {
-          final statusColor =
-          r.status == 'WARNING / BANNED' ? _red : _amber;
+          final statusColor = _isWarning(r.status) ? _red : _amber;
           return pw.TableRow(children: [
             _tableCell(r.name),
             _tableCell(_fmtDate(r.date)),
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                r.status == 'WARNING / BANNED' ? 'BANNED' : 'NON-COMPLIANT',
+                _isWarning(r.status) ? 'WARNING' : 'NON-COMPLIANT',
                 style: pw.TextStyle(
                     fontSize: 8.5,
                     fontWeight: pw.FontWeight.bold,

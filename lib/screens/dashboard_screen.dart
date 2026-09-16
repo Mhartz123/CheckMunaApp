@@ -65,7 +65,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // same pass that picks the recent few, so there's no second directory walk.
   int _totalScans = 0;
   int _compliantCount = 0;
-  int _flaggedCount = 0; // non-compliant + banned
+  int _flaggedCount = 0; // non-compliant + warning
 
   @override
   void initState() {
@@ -101,7 +101,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             compliant++;
             break;
           case ComplianceStatus.nonCompliant:
-          case ComplianceStatus.banned:
+          case ComplianceStatus.warning:
             flagged++;
             break;
         }

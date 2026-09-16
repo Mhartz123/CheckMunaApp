@@ -29,8 +29,8 @@ class AppColors {
   static Color get nonCompliantText =>
       _dark ? _Dark.nonCompliantText : _Light.nonCompliantText;
 
-  static Color get bannedBg => _dark ? _Dark.bannedBg : _Light.bannedBg;
-  static Color get bannedText => _dark ? _Dark.bannedText : _Light.bannedText;
+  static Color get warningBg => _dark ? _Dark.warningBg : _Light.warningBg;
+  static Color get warningText => _dark ? _Dark.warningText : _Light.warningText;
 
   static Color get labelKind => accentLight;
   static Color get damageKind => _dark ? _Dark.damageKind : _Light.damageKind;
@@ -57,8 +57,8 @@ class _Light {
   static const nonCompliantBg = Color(0xFFFFF8E1);
   static const nonCompliantText = Color(0xFFE65100);
 
-  static const bannedBg = Color(0xFFFFEBEE);
-  static const bannedText = Color(0xFFB71C1C);
+  static const warningBg = Color(0xFFFFEBEE);
+  static const warningText = Color(0xFFB71C1C);
 
   static const damageKind = Color(0xFF1E88E5);
   static const inspection = Color(0xFF8E24AA);
@@ -82,8 +82,8 @@ class _Dark {
   static const nonCompliantBg = Color(0xFF3A2E12);
   static const nonCompliantText = Color(0xFFFFB74D);
 
-  static const bannedBg = Color(0xFF3B1B1D);
-  static const bannedText = Color(0xFFEF9A9A);
+  static const warningBg = Color(0xFF3B1B1D);
+  static const warningText = Color(0xFFEF9A9A);
 
   static const damageKind = Color(0xFF64B5F6);
   static const inspection = Color(0xFFCE93D8);

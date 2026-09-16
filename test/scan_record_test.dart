@@ -75,7 +75,7 @@ void main() {
     test('inspection scan keeps both halves in one record', () {
       final original = ScanRecord(
         kind: ScanKind.both,
-        status: ComplianceStatus.banned,
+        status: ComplianceStatus.warning,
         matchedKeyword: 'Lipo Slim Extreme',
         reasons: const ['Matches FDA advisory.', 'Packaging damage detected.'],
         productName: 'Lipo Slim Extreme',
@@ -102,12 +102,37 @@ void main() {
       expect(restored.productName, 'Lipo Slim Extreme');
       expect(restored.packagingType, PackagingType.bottle);
       expect(restored.damageCheck.detections, ['Scratches']);
-      expect(restored.status, ComplianceStatus.banned);
-      expect(restored.statusLabel, 'WARNING / BANNED');
+      expect(restored.status, ComplianceStatus.warning);
+      expect(restored.statusLabel, 'WARNING');
     });
   });
 
   group('legacy records', () {
+    test('a record saved as WARNING / BANNED still loads as a warning', () {
+      // Every scan saved before the Banned→Warning rename carries the old
+      // status string. If this regresses, historical advisory hits silently
+      // downgrade to NON-COMPLIANT on load — a wrong verdict, not a cosmetic
+      // one, and one that also skews the dashboard counts.
+      final restored = ScanRecord.fromJson({
+        'kind': 'label',
+        'status': 'WARNING / BANNED',
+        'matchedKeyword': 'Lipo Slim Extreme',
+        'scannedAt': '2026-08-16T12:00:00.000',
+      });
+
+      expect(restored.status, ComplianceStatus.warning);
+      // Re-saving normalises it to the current spelling.
+      expect(restored.statusLabel, 'WARNING');
+    });
+
+    test('isWarningLabel accepts current and legacy spellings only', () {
+      expect(ScanRecord.isWarningLabel('WARNING'), isTrue);
+      expect(ScanRecord.isWarningLabel('WARNING / BANNED'), isTrue);
+      expect(ScanRecord.isWarningLabel('BANNED'), isTrue);
+      expect(ScanRecord.isWarningLabel('NON-COMPLIANT'), isFalse);
+      expect(ScanRecord.isWarningLabel('COMPLIANT'), isFalse);
+    });
+
     test('a record saved before the split reads as both halves', () {
       // Pre-split data.json had no `kind` and carried label + damage
       // together; treating it as label-only would hide its damage result.

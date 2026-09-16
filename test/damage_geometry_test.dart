@@ -141,17 +141,5 @@ void main() {
       expect(const DamageCheckResult.placeholder().boxes, isEmpty);
       expect(const DamageCheckResult.notPerformed().boxes, isEmpty);
     });
-
-    test('hasScratch reads the model\'s lower-case class names', () {
-      // The YOLOv5nu model's metadata names are 'dents'/'scratches'; the
-      // service title-cases them, but the check must not depend on that.
-      const damage = DamageCheckResult(
-        available: true,
-        message: '',
-        isDamaged: true,
-        detections: ['scratches'],
-      );
-      expect(damage.hasScratch, isTrue);
-    });
   });
 }

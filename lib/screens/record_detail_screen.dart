@@ -230,8 +230,8 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
         return AppColors.compliantBg;
       case ComplianceStatus.nonCompliant:
         return AppColors.nonCompliantBg;
-      case ComplianceStatus.banned:
-        return AppColors.bannedBg;
+      case ComplianceStatus.warning:
+        return AppColors.warningBg;
     }
   }
 
@@ -241,8 +241,8 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
         return 'FDA VERIFIED';
       case ComplianceStatus.nonCompliant:
         return 'NON-COMPLIANT';
-      case ComplianceStatus.banned:
-        return 'FDA BANNED';
+      case ComplianceStatus.warning:
+        return 'FDA ADVISORY';
     }
   }
 
@@ -511,7 +511,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: compliant ? AppColors.surfaceAlt : AppColors.bannedBg,
+              color: compliant ? AppColors.surfaceAlt : AppColors.warningBg,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(Icons.call,

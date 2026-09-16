@@ -45,7 +45,7 @@ class ResultScreen extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final isCompliant = record.status == ComplianceStatus.compliant;
-    final isBanned = record.status == ComplianceStatus.banned;
+    final isWarning = record.status == ComplianceStatus.warning;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -110,8 +110,8 @@ class ResultScreen extends StatelessWidget {
                       width: double.infinity,
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: isBanned
-                            ? AppColors.bannedBg
+                        color: isWarning
+                            ? AppColors.warningBg
                             : AppColors.nonCompliantBg,
                         borderRadius: BorderRadius.circular(14),
                       ),
@@ -122,21 +122,21 @@ class ResultScreen extends StatelessWidget {
                             children: [
                               Icon(
                                 Icons.warning_amber_rounded,
-                                color: isBanned
-                                    ? AppColors.bannedText
+                                color: isWarning
+                                    ? AppColors.warningText
                                     : AppColors.nonCompliantText,
                                 size: 18,
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                isBanned
+                                isWarning
                                     ? "Why it's flagged"
                                     : "Why it's non-compliant",
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 13.5,
-                                  color: isBanned
-                                      ? AppColors.bannedText
+                                  color: isWarning
+                                      ? AppColors.warningText
                                       : AppColors.nonCompliantText,
                                 ),
                               ),

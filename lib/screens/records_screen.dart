@@ -216,11 +216,11 @@ class RecordsScreenState extends State<RecordsScreen> {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: AppColors.bannedBg,
+                    color: AppColors.warningBg,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(Icons.delete_outline,
-                      color: AppColors.bannedText, size: 20),
+                      color: AppColors.warningText, size: 20),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -250,14 +250,14 @@ class RecordsScreenState extends State<RecordsScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.bannedBg,
+                color: AppColors.warningBg,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(Icons.warning_amber_rounded,
-                      size: 16, color: AppColors.bannedText),
+                      size: 16, color: AppColors.warningText),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -265,7 +265,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                       style: TextStyle(
                         fontSize: 12,
                         height: 1.4,
-                        color: AppColors.bannedText,
+                        color: AppColors.warningText,
                       ),
                     ),
                   ),
@@ -345,7 +345,7 @@ class RecordsScreenState extends State<RecordsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to generate report: $e'),
-          backgroundColor: AppColors.bannedText,
+          backgroundColor: AppColors.warningText,
         ),
       );
     }
@@ -486,12 +486,15 @@ class RecordsScreenState extends State<RecordsScreen> {
                           }),
                       const SizedBox(width: 6),
                       _SortChip(
-                          label: 'Banned',
-                          selected: _complianceFilter == 'WARNING / BANNED',
+                          label: 'Warning',
+                          selected:
+                              _complianceFilter == ScanRecord.warningLabel,
                           color: const Color(0xFFF44336),
                           onTap: () {
                             setState(() => _complianceFilter =
-                            _complianceFilter == 'WARNING / BANNED' ? '' : 'WARNING / BANNED');
+                            _complianceFilter == ScanRecord.warningLabel
+                                ? ''
+                                : ScanRecord.warningLabel);
                             _applySort();
                           }),
                     ],
@@ -642,7 +645,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                         label: const Text('Delete All',
                             style: TextStyle(color: Colors.white)),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.bannedText,
+                          backgroundColor: AppColors.warningText,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8)),
                         ),
@@ -768,6 +771,18 @@ class _RecordCard extends StatelessWidget {
 
   ({IconData icon, Color bg, Color fg, Color pillBg, Color pillText}) _statusVisuals(
       String status) {
+    // Checked before the switch: records saved before the Banned→Warning
+    // rename still carry the old status string, and they should draw
+    // identically to new ones rather than falling through to the default.
+    if (ScanRecord.isWarningLabel(status)) {
+      return (
+      icon: Icons.report_problem_outlined,
+      bg: AppColors.warningBg,
+      fg: AppColors.warningText,
+      pillBg: AppColors.warningBg,
+      pillText: AppColors.warningText,
+      );
+    }
     switch (status) {
       case 'COMPLIANT':
         return (
@@ -784,14 +799,6 @@ class _RecordCard extends StatelessWidget {
         fg: AppColors.nonCompliantText,
         pillBg: AppColors.nonCompliantBg,
         pillText: AppColors.nonCompliantText,
-        );
-      case 'WARNING / BANNED':
-        return (
-        icon: Icons.block,
-        bg: AppColors.bannedBg,
-        fg: AppColors.bannedText,
-        pillBg: AppColors.bannedBg,
-        pillText: AppColors.bannedText,
         );
       default:
         return (
@@ -871,11 +878,11 @@ class _RecordCard extends StatelessWidget {
                             height: 28,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: AppColors.bannedBg,
+                              color: AppColors.warningBg,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Icon(Icons.close,
-                                color: AppColors.bannedText, size: 16),
+                                color: AppColors.warningText, size: 16),
                           ),
                         ),
 

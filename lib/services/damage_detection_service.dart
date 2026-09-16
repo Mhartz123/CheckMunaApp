@@ -105,9 +105,9 @@ class DamageModelException implements Exception {
 ///
 /// Pipeline per photo: decode → letterbox to [inputSize] → CHW float32 (÷255)
 /// → model → decode the [1, 4+nc, anchors] output → confidence filter →
-/// class-aware NMS. Any surviving detection counts as damage; raw class names
-/// are preserved so downstream checks like [DamageCheckResult.hasScratch]
-/// keep working.
+/// class-aware NMS. Any surviving detection counts as damage, except classes
+/// listed in [nonDamageClasses]; raw class names are preserved for display and
+/// for the reason line ComplianceEngine builds.
 ///
 /// Failures (bad decode, model load error) are reported through
 /// [DamageCheckResult.available] rather than thrown, so a scan still completes

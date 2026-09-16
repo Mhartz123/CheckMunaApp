@@ -3,7 +3,13 @@ import 'package:flutter/material.dart';
 import 'scan_timings.dart';
 
 /// Compliance classification for a saved record.
-enum ComplianceStatus { compliant, nonCompliant, banned }
+/// The three verdicts a scan can produce.
+///
+/// [warning] is what an FDA advisory-index hit routes to — deliberately NOT
+/// [nonCompliant]. An advisory match says the product name resembles one on
+/// the FDA's warned/unregistered list, which is a flag for manual
+/// verification, not a finding the app can make on its own.
+enum ComplianceStatus { compliant, nonCompliant, warning }
 
 /// Which check(s) a [ScanRecord] represents. Label checking and box/damage
 /// checking are two independent scan flows (see CameraScreen/
@@ -225,11 +231,6 @@ class DamageCheckResult {
         maxConfidence = 0.0,
         timings = ScanTimings.empty;
 
-  /// True if any detection class reads as a scratch (scratches count against
-  /// compliance regardless of confidence).
-  bool get hasScratch =>
-      detections.any((d) => d.toLowerCase().contains('scratch'));
-
   /// One line naming what was found and how sure the model was, e.g.
   /// "Dent x2 (up to 87%), Scratches (72%)". Falls back to the bare class
   /// list for records saved before per-detection confidence was stored.
@@ -335,8 +336,8 @@ class ScanRecord {
         return 'COMPLIANT';
       case ComplianceStatus.nonCompliant:
         return 'NON-COMPLIANT';
-      case ComplianceStatus.banned:
-        return 'WARNING / BANNED';
+      case ComplianceStatus.warning:
+        return warningLabel;
     }
   }
 
@@ -372,9 +373,24 @@ class ScanRecord {
         DateTime.now(),
   );
 
+  /// The serialized status string new records write for
+  /// [ComplianceStatus.warning].
+  static const String warningLabel = 'WARNING';
+
+  /// What records saved before the Banned→Warning rename carry. Still has to
+  /// match when loading, filtering, and reporting, or every historical
+  /// advisory hit silently falls through to NON-COMPLIANT.
+  static const List<String> legacyWarningLabels = ['WARNING / BANNED', 'BANNED'];
+
+  /// True if [s] is a warning status in either the current or a legacy
+  /// spelling. Used by anything comparing raw persisted status strings
+  /// (records list filters, the PDF report builder).
+  static bool isWarningLabel(String s) =>
+      s == warningLabel || legacyWarningLabels.contains(s);
+
   static ComplianceStatus _statusFromLabel(String s) {
     if (s == 'COMPLIANT') return ComplianceStatus.compliant;
-    if (s == 'WARNING / BANNED') return ComplianceStatus.banned;
+    if (isWarningLabel(s)) return ComplianceStatus.warning;
     return ComplianceStatus.nonCompliant;
   }
 
@@ -406,7 +422,7 @@ extension ScanRecordUi on ScanRecord {
         return const Color(0xFF4CAF50);
       case ComplianceStatus.nonCompliant:
         return const Color(0xFFFF9800);
-      case ComplianceStatus.banned:
+      case ComplianceStatus.warning:
         return const Color(0xFFF44336);
     }
   }
@@ -417,8 +433,8 @@ extension ScanRecordUi on ScanRecord {
         return Icons.check_circle;
       case ComplianceStatus.nonCompliant:
         return Icons.warning;
-      case ComplianceStatus.banned:
-        return Icons.dangerous;
+      case ComplianceStatus.warning:
+        return Icons.report_problem;
     }
   }
 
@@ -428,8 +444,8 @@ extension ScanRecordUi on ScanRecord {
         return 'Compliant';
       case ComplianceStatus.nonCompliant:
         return 'Non-Compliant';
-      case ComplianceStatus.banned:
-        return 'Banned';
+      case ComplianceStatus.warning:
+        return 'Warning';
     }
   }
 
@@ -439,8 +455,8 @@ extension ScanRecordUi on ScanRecord {
         return 'Product is compliant with the FDA and is safe to consume. Please refer to instructions / professionals with regards to safe dosage.';
       case ComplianceStatus.nonCompliant:
         return 'Product is non-compliant with the FDA and is inadvisable to consume. Please refer to the local FDA hotline near you to report this occurrence.';
-      case ComplianceStatus.banned:
-        return 'Product is banned by the FDA, dangerous to consume. Please immediately refer to the local FDA hotline near you to report this occurrence.';
+      case ComplianceStatus.warning:
+        return 'This product matched an FDA advisory and needs manual verification before sale or use. Please refer to the local FDA hotline near you to confirm its status.';
     }
   }
 
@@ -449,7 +465,7 @@ extension ScanRecordUi on ScanRecord {
       case ComplianceStatus.compliant:
         return Colors.black54;
       case ComplianceStatus.nonCompliant:
-      case ComplianceStatus.banned:
+      case ComplianceStatus.warning:
         return const Color(0xFFE57373);
     }
   }
