@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'scan_timings.dart';
+
 /// Compliance classification for a saved record.
 enum ComplianceStatus { compliant, nonCompliant, banned }
 
@@ -15,11 +17,9 @@ enum ScanKind { label, damage, both }
 /// PackagingTypeScreen before the camera opens for any flow that includes a
 /// damage step.
 ///
-/// Only [box] has a real detection model right now ([hasModel]) — [foil] and
-/// [bottle] are wired up end-to-end as placeholders (capture flow, picker UI,
-/// record storage) so a future model only needs a new
-/// `PackagingDamageDetector` registered in `packaging_damage_service.dart`;
-/// nothing else in the app needs to change.
+/// Every type has an on-device detection model ([hasModel]). A replacement
+/// model only needs a new `PackagingDamageDetector` registered in
+/// `packaging_damage_service.dart`; nothing else in the app needs to change.
 enum PackagingType { box, foil, bottle }
 
 extension PackagingTypeX on PackagingType {
@@ -35,9 +35,9 @@ extension PackagingTypeX on PackagingType {
   }
 
   /// Whether a real detection model is wired up for this packaging type yet.
-  /// See the class doc above — [foil] and [bottle] are placeholders until
-  /// their models ship.
-  bool get hasModel => this == PackagingType.box;
+  /// All three ship a model today; kept so the picker can grey a type out
+  /// again if one is ever pulled.
+  bool get hasModel => true;
 
   IconData get icon {
     switch (this) {
@@ -59,6 +59,18 @@ extension PackagingTypeX on PackagingType {
 enum PhotoSlot { front, expiration, ingredients }
 
 extension PhotoSlotX on PhotoSlot {
+  /// How this slot is named in the on-screen timing breakdown.
+  String get timingLabel {
+    switch (this) {
+      case PhotoSlot.front:
+        return 'Product name';
+      case PhotoSlot.expiration:
+        return 'Expiration date';
+      case PhotoSlot.ingredients:
+        return 'Ingredient list';
+    }
+  }
+
   String get fileBaseName {
     switch (this) {
       case PhotoSlot.front:
@@ -154,9 +166,8 @@ class DamageDetection {
 
 /// Result of a packaging-damage check via a `PackagingDamageDetector` (see
 /// `packaging_damage_service.dart`). [available] is false when the check
-/// couldn't run at all — no network/backend for a live model, or (for
-/// [PackagingType.foil]/[PackagingType.bottle] today) because no model is
-/// wired up yet — distinct from [isDamaged], which is only meaningful when
+/// couldn't run at all — e.g. the model failed to load, or inference failed on
+/// every photo — distinct from [isDamaged], which is only meaningful when
 /// [available] is true.
 class DamageCheckResult {
   final bool available;
@@ -179,6 +190,11 @@ class DamageCheckResult {
   /// compliance. 0 when nothing was detected or confidence wasn't reported.
   final double maxConfidence;
 
+  /// How long the model actually took on this device — load, preprocessing and
+  /// inference (see DamageDetectionService). [ScanTimings.empty] when the
+  /// check never ran, or for records saved before timings were measured.
+  final ScanTimings timings;
+
   const DamageCheckResult({
     required this.available,
     required this.message,
@@ -186,6 +202,7 @@ class DamageCheckResult {
     this.detections = const [],
     this.boxes = const [],
     this.maxConfidence = 0.0,
+    this.timings = ScanTimings.empty,
   });
 
   const DamageCheckResult.placeholder()
@@ -194,7 +211,8 @@ class DamageCheckResult {
         isDamaged = false,
         detections = const [],
         boxes = const [],
-        maxConfidence = 0.0;
+        maxConfidence = 0.0,
+        timings = ScanTimings.empty;
 
   /// Used for label-only scans, where the damage check was never run because
   /// the user chose "Check Labels" rather than a damage-inclusive flow.
@@ -204,7 +222,8 @@ class DamageCheckResult {
         isDamaged = false,
         detections = const [],
         boxes = const [],
-        maxConfidence = 0.0;
+        maxConfidence = 0.0,
+        timings = ScanTimings.empty;
 
   /// True if any detection class reads as a scratch (scratches count against
   /// compliance regardless of confidence).
@@ -238,6 +257,7 @@ class DamageCheckResult {
     'detections': detections,
     'boxes': boxes.map((b) => b.toJson()).toList(),
     'maxConfidence': maxConfidence,
+    if (timings.isNotEmpty) 'timings': timings.toJson(),
   };
 
   factory DamageCheckResult.fromJson(Map<String, dynamic>? json) {
@@ -253,6 +273,7 @@ class DamageCheckResult {
           .toList() ??
           const [],
       maxConfidence: (json['maxConfidence'] as num?)?.toDouble() ?? 0.0,
+      timings: ScanTimings.fromJson(json['timings'] as List?),
     );
   }
 }
@@ -275,6 +296,12 @@ class ScanRecord {
   /// field existed.
   final PackagingType? packagingType;
 
+  /// Measured on-device cost of the ML work in this scan — OCR per label slot,
+  /// and the damage model's load/preprocess/inference. [ScanTimings.empty] for
+  /// records saved before timings were measured, which simply show no timing
+  /// section.
+  final ScanTimings timings;
+
   final DateTime scannedAt;
 
   const ScanRecord({
@@ -288,6 +315,7 @@ class ScanRecord {
     required this.extractedText,
     required this.damageCheck,
     this.packagingType,
+    this.timings = ScanTimings.empty,
     required this.scannedAt,
   });
 
@@ -323,6 +351,7 @@ class ScanRecord {
     'extractedText': extractedText,
     'damageCheck': damageCheck.toJson(),
     if (packagingType != null) 'packagingType': packagingType!.name,
+    if (timings.isNotEmpty) 'timings': timings.toJson(),
     'scannedAt': scannedAt.toIso8601String(),
   };
 
@@ -338,6 +367,7 @@ class ScanRecord {
     damageCheck:
     DamageCheckResult.fromJson(json['damageCheck'] as Map<String, dynamic>?),
     packagingType: _packagingTypeFromName(json['packagingType'] as String?),
+    timings: ScanTimings.fromJson(json['timings'] as List?),
     scannedAt: DateTime.tryParse(json['scannedAt'] as String? ?? '') ??
         DateTime.now(),
   );

@@ -21,6 +21,21 @@ class DateCode {
   final DateTime? expiry;
 
   final String? batch;
+
+  /// The product's FDA registration / notification number as printed, e.g.
+  /// `DRP-12623` or a bare CPR number like `4000009048522`.
+  ///
+  /// Read strictly from a value sitting beside an FDA/CPR/"Reg. No." label —
+  /// never from an unlabelled token. A batch code with no label can be
+  /// reported wrong at little cost, but a registration number is a claim about
+  /// the product's regulatory status, so a guess here is worse than a null.
+  /// See [DateCodeParser._pickRegistration].
+  ///
+  /// This is the number AS PRINTED. Nothing in the app verifies it against the
+  /// FDA register: the bundled index (`assets/fda_index_names.txt`) holds
+  /// product NAMES only, with no registration numbers to match against.
+  final String? fdaRegistration;
+
   final DateCodeStatus status;
 
   /// Why the read is unreadable or ambiguous, for the report.
@@ -51,6 +66,7 @@ class DateCode {
     this.manufactured,
     this.expiry,
     this.batch,
+    this.fdaRegistration,
     required this.status,
     this.note,
     this.matchedFormat,
@@ -128,8 +144,15 @@ class DateCodeParser {
   // lookahead lets EXP match "EXP03/2028" (no word boundary between P and 0)
   // while still rejecting EXPORT, and the longer spellings come first so they
   // are not shadowed by the short one.
+  // The licence lookahead is not a nicety. A Philippine carton prints
+  // "Mfg. Lic. No." directly above "Mfg. Date", and MFG matches BOTH — which
+  // gives three date anchors against two dates, so the ordinal zip is
+  // abandoned and the whole read is downgraded to ambiguous even though the
+  // dates themselves came out right. A manufacturing LICENCE number is not a
+  // date label, so it must not register as one.
   static final RegExp _mfgAnchor = RegExp(
-      r'\b(?:MANUFACTUR[A-Z]*|PRODUCTION|MFG|MFD|PROD)(?![A-Za-z])',
+      r'\b(?:MANUFACTUR[A-Z]*|PRODUCTION|MFG|MFD|PROD)(?![A-Za-z])'
+      r'(?!\W{0,3}LIC)',
       caseSensitive: false);
 
   // "BEST BEFORE", "USE BY" and "VALID UNTIL" are as common as EXP on
@@ -145,6 +168,22 @@ class DateCodeParser {
 
   static final RegExp _batchAnchor =
       RegExp(r'\b(?:BATCH|LOT)(?![A-Za-z])', caseSensitive: false);
+
+  /// Labels that introduce an FDA registration / notification number.
+  ///
+  /// Philippine packaging prints this several ways — `FDA Reg. No.`,
+  /// `FDA FR No.`, `Reg. No.`, `CPR No.` — so the anchor is an alternation
+  /// over the words that actually appear rather than one fixed spelling. A
+  /// line can produce two matches (`FDA` and `Reg. No.` both fire on
+  /// "FDA Reg. No."); that is harmless, since only the first is used and both
+  /// carry the same bounding box.
+  ///
+  /// Deliberately NOT matched: `Mfg. Lic. No.`. A licence number identifies
+  /// the manufacturer, not the product registration, and the two sit next to
+  /// each other on exactly the cartons this parser is aimed at.
+  static final RegExp _fdaRegAnchor = RegExp(
+      r'\b(?:FDA|CPR|REG(?:ISTRATION)?\.?\s*(?:NO|#))(?![A-Za-z])',
+      caseSensitive: false);
 
   /// One separator between date components: punctuation with optional spaces
   /// around it, or plain whitespace on its own. Overprinters use all of them,
@@ -278,9 +317,21 @@ class DateCodeParser {
     anchors.sort(_byReadingPosition);
     tokens.sort(_byReadingPosition);
 
-    final batch = _pickBatch(anchors, batches);
+    // Registration first, batch second, and the order is load-bearing.
+    // [_pickRegistration] only ever fires on an explicit label, whereas
+    // [_pickBatch] will take a lone unlabelled candidate — so picking batch
+    // first lets it swallow a value that is sitting under an "FDA Reg. No."
+    // label, leaving the registration with nothing.
+    final registration = _pickRegistration(anchors, batches);
+    final batch = _pickBatch(anchors, batches, exclude: registration);
+
+    // Only the two date labels drive the ordinal zip below. The batch and
+    // registration anchors have their own values and would otherwise be
+    // counted as dates with nothing to bind to, which is precisely what
+    // collapses the zip into the proximity fallback.
     final dateAnchors = anchors
-        .where((a) => a.kind != _AnchorKind.batch)
+        .where((a) =>
+            a.kind == _AnchorKind.mfg || a.kind == _AnchorKind.exp)
         .toList(growable: false);
 
     _DateToken? manufacturedToken;
@@ -348,6 +399,7 @@ class DateCodeParser {
       manufactured: manufacturedToken?.asManufactured,
       expiry: expiryToken?.asExpiry,
       batch: batch,
+      fdaRegistration: registration,
       status: status,
       note: note,
       matchedFormat: expiryToken?.format,
@@ -370,6 +422,7 @@ class DateCodeParser {
     required DateTime? manufactured,
     required DateTime? expiry,
     required String? batch,
+    required String? fdaRegistration,
     required DateCodeStatus status,
     required String? note,
     required String? matchedFormat,
@@ -377,8 +430,15 @@ class DateCodeParser {
     required double? confidence,
     required DateTime today,
   }) {
-    DateCode unreadable(String why) =>
-        DateCode(batch: batch, status: DateCodeStatus.unreadable, note: why);
+    // An unreadable DATE does not invalidate the registration number, which
+    // was read off its own label and validated on its own terms — so it
+    // survives here alongside the batch code.
+    DateCode unreadable(String why) => DateCode(
+          batch: batch,
+          fdaRegistration: fdaRegistration,
+          status: DateCodeStatus.unreadable,
+          note: why,
+        );
 
     if (manufactured == null && expiry == null) {
       return unreadable(note ?? 'No readable date code found.');
@@ -426,6 +486,7 @@ class DateCodeParser {
       manufactured: manufactured,
       expiry: expiry,
       batch: batch,
+      fdaRegistration: fdaRegistration,
       status: status,
       note: note,
       matchedFormat: matchedFormat,
@@ -457,6 +518,7 @@ class DateCodeParser {
     }
 
     const anchorPatterns = <_AnchorKind>[
+      _AnchorKind.fdaReg,
       _AnchorKind.mfg,
       _AnchorKind.exp,
       _AnchorKind.batch,
@@ -500,6 +562,7 @@ class DateCodeParser {
         _AnchorKind.mfg => _mfgAnchor,
         _AnchorKind.exp => _expAnchor,
         _AnchorKind.batch => _batchAnchor,
+        _AnchorKind.fdaReg => _fdaRegAnchor,
       };
 
   static String _mask(String source, List<bool> claimed) {
@@ -798,8 +861,18 @@ class DateCodeParser {
 
   static String? _pickBatch(
     List<_Anchor> anchors,
-    List<_BatchCandidate> candidates,
-  ) {
+    List<_BatchCandidate> allCandidates, {
+    String? exclude,
+  }) {
+    // Whatever the registration picker already claimed is off the table: it
+    // only claims a value that carries its own label, so re-reporting that
+    // same value as the lot number would be flatly wrong.
+    final candidates = exclude == null
+        ? allCandidates
+        : allCandidates
+            .where((c) => c.text != exclude)
+            .toList(growable: false);
+
     if (candidates.isEmpty) return null;
     if (candidates.length == 1) return candidates.first.text;
 
@@ -828,9 +901,74 @@ class DateCodeParser {
     // reporting the wrong one is no worse than reporting none.
     return (best ?? candidates.first).text;
   }
+
+  /// The FDA registration number sitting beside an FDA/CPR/"Reg. No." label.
+  ///
+  /// Deliberately stricter than [_pickBatch] in two ways, and both matter:
+  ///
+  /// * No anchor, no answer. [_pickBatch] will return the only candidate it
+  ///   found even with no BATCH label present, because an unlabelled code on a
+  ///   date panel is almost always the lot number and a wrong one costs
+  ///   little. A registration number is a regulatory claim — "this product is
+  ///   FDA-registered as X" — so an unlabelled guess is worse than reporting
+  ///   nothing.
+  /// * No reading-order fallback. [_pickBatch] ends with `candidates.first`
+  ///   when nothing is close enough; here a candidate that is not within
+  ///   [kProximityLineHeights] of the label is simply not returned. On the
+  ///   carton this was built against, the value one row down is the
+  ///   MANUFACTURING LICENCE number, so the fallback would not merely be
+  ///   imprecise — it would confidently report the wrong number entirely.
+  ///
+  /// Runs BEFORE [_pickBatch], which is then told to skip whatever was taken
+  /// here — see the call site. A value carrying its own registration label
+  /// must not also be reported as the lot number.
+  static String? _pickRegistration(
+    List<_Anchor> anchors,
+    List<_BatchCandidate> candidates,
+  ) {
+    if (candidates.isEmpty) return null;
+
+    _Anchor? anchor;
+    for (final a in anchors) {
+      if (a.kind == _AnchorKind.fdaReg) {
+        anchor = a;
+        break;
+      }
+    }
+    if (anchor == null) return null;
+
+    final height = anchor.box.height <= 0 ? 1.0 : anchor.box.height;
+    final limit = height * kProximityLineHeights;
+
+    _BatchCandidate? best;
+    var bestDistance = double.infinity;
+    for (final candidate in candidates) {
+      if (!_looksLikeRegistration(candidate.text)) continue;
+      final distance = (candidate.box.center.dy - anchor.box.center.dy).abs();
+      if (distance > limit) continue;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = candidate;
+      }
+    }
+    return best?.text;
+  }
+
+  /// Shape check only — length and "has a digit".
+  ///
+  /// Intentionally NOT a whitelist of prefixes. Philippine registration
+  /// numbers come in a wide spread of forms (`DRP-12623`, `FR-xxxxx`,
+  /// `NN-xxxxxxx`, bare 13-digit CPR numbers like `4000009048522`) and the
+  /// list changes as the FDA revises its numbering; a whitelist would silently
+  /// drop every form it had not been taught. The LABEL is what identifies this
+  /// value, so the value itself only has to be plausible.
+  static bool _looksLikeRegistration(String text) {
+    if (text.length < 4 || text.length > 24) return false;
+    return RegExp(r'\d').hasMatch(text);
+  }
 }
 
-enum _AnchorKind { mfg, exp, batch }
+enum _AnchorKind { mfg, exp, batch, fdaReg }
 
 /// Anything carrying a position in reading order.
 abstract class _Positioned {

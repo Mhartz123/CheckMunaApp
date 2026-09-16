@@ -477,4 +477,114 @@ void main() {
       }
     });
   });
+
+  // The regulatory data panel found on Philippine pharmaceutical cartons:
+  // registration number, manufacturing licence number, batch, and the two
+  // dates, stacked as label/value rows. Two things about it are easy to get
+  // wrong, and both were: "Mfg. Lic. No." reads as a manufacture-DATE label,
+  // and the registration number reads as a batch code.
+  group('FDA data panel', () {
+    // As ML Kit returns it when the label and its value land in one line.
+    List<TextLine> wholeRows() => _stacked(<String>[
+          'FDA Reg. No. : DRP-12623',
+          'Mfg. Lic. No. :  MNB/07/548',
+          'Batch No. :   MHET/3621',
+          'Mfg. Date :   12 MAY. 2025',
+          'Exp. Date :   11 MAY. 2028',
+        ]);
+
+    // The same panel split into a label column and a value column, which is
+    // what a wider crop or a tighter print usually produces.
+    List<TextLine> twoColumns() => <TextLine>[
+          _line('FDA Reg. No. :', const Rect.fromLTWH(20, 20, 150, 24)),
+          _line('Mfg. Lic. No. :', const Rect.fromLTWH(20, 60, 150, 24)),
+          _line('Batch No. :', const Rect.fromLTWH(20, 100, 150, 24)),
+          _line('Mfg. Date :', const Rect.fromLTWH(20, 140, 150, 24)),
+          _line('Exp. Date :', const Rect.fromLTWH(20, 180, 150, 24)),
+          _line('DRP-12623', const Rect.fromLTWH(200, 20, 150, 24)),
+          _line('MNB/07/548', const Rect.fromLTWH(200, 60, 150, 24)),
+          _line('MHET/3621', const Rect.fromLTWH(200, 100, 150, 24)),
+          _line('12 MAY. 2025', const Rect.fromLTWH(200, 140, 150, 24)),
+          _line('11 MAY. 2028', const Rect.fromLTWH(200, 180, 150, 24)),
+        ];
+
+    test('reads the registration number off both layouts', () {
+      expect(_parse(wholeRows()).fdaRegistration, 'DRP-12623');
+      expect(_parse(twoColumns()).fdaRegistration, 'DRP-12623');
+    });
+
+    test('the manufacturing licence number is not a manufacture date', () {
+      // MFG matches "Mfg. Lic. No." as readily as "Mfg. Date", giving three
+      // date anchors against two dates. That collapses the ordinal zip into
+      // the proximity fallback and downgrades a perfectly good read to
+      // ambiguous, so the status is the assertion that matters here.
+      for (final layout in <List<TextLine>>[wholeRows(), twoColumns()]) {
+        final code = _parse(layout);
+        expect(code.status, DateCodeStatus.parsed);
+        expect(code.manufactured, DateTime(2025, 5, 12));
+        expect(code.expiry, DateTime(2028, 5, 11));
+      }
+    });
+
+    test('registration, licence and batch are kept apart', () {
+      for (final layout in <List<TextLine>>[wholeRows(), twoColumns()]) {
+        final code = _parse(layout);
+        expect(code.batch, 'MHET/3621');
+        expect(code.fdaRegistration, 'DRP-12623');
+        // The licence number belongs to neither field.
+        expect(code.batch, isNot('MNB/07/548'));
+        expect(code.fdaRegistration, isNot('MNB/07/548'));
+      }
+    });
+
+    test('an unlabelled code is never reported as a registration number', () {
+      // _pickBatch will take a lone candidate with no BATCH label; the
+      // registration picker must not, because the claim it makes is about
+      // regulatory status rather than a lot.
+      final code = _parse(_stacked(<String>['DRP-12623', 'EXP 11 MAY 2028']));
+
+      expect(code.fdaRegistration, isNull);
+    });
+
+    test('a registration label with no value nearby yields null', () {
+      // The value sits three rows down, well past the proximity limit — the
+      // licence number. Reporting it would be worse than reporting nothing.
+      final code = _parse(<TextLine>[
+        _line('FDA Reg. No. :', const Rect.fromLTWH(20, 20, 150, 24)),
+        _line('MNB/07/548', const Rect.fromLTWH(200, 200, 150, 24)),
+      ]);
+
+      expect(code.fdaRegistration, isNull);
+    });
+
+    test('reads a bare CPR number beside an FDA FR label', () {
+      // The ATC carton form: no letters, 13 digits, and a value column that
+      // drifts upward off its labels.
+      final code = _parse(<TextLine>[
+        _line('Batch No.:', const Rect.fromLTWH(370, 1082, 200, 36)),
+        _line('Mfg. Date:', const Rect.fromLTWH(370, 1162, 200, 36)),
+        _line('Exp. Date:', const Rect.fromLTWH(370, 1244, 200, 36)),
+        _line('FDA FR No.:', const Rect.fromLTWH(370, 1322, 220, 36)),
+        _line('GS002B26', const Rect.fromLTWH(630, 1174, 210, 32)),
+        _line('04FEB2026', const Rect.fromLTWH(630, 1206, 210, 32)),
+        _line('04FEB2028', const Rect.fromLTWH(630, 1249, 210, 32)),
+        _line('4000009048522', const Rect.fromLTWH(630, 1289, 330, 32)),
+      ]);
+
+      expect(code.fdaRegistration, '4000009048522');
+      expect(code.batch, 'GS002B26');
+    });
+
+    test('a registration number survives an unreadable date', () {
+      // It was read off its own label and validated on its own terms, so a
+      // date failure must not take it down with it.
+      final code = _parse(_stacked(<String>[
+        'FDA Reg. No. : DRP-12623',
+        'Exp. Date : 11 MAY. 2099',
+      ]));
+
+      expect(code.status, DateCodeStatus.unreadable);
+      expect(code.fdaRegistration, 'DRP-12623');
+    });
+  });
 }

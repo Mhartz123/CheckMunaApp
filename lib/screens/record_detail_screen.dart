@@ -6,6 +6,7 @@ import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
 import '../services/theme_controller.dart';
 import '../widgets/damage_overlay.dart';
+import '../widgets/timing_breakdown.dart';
 
 class RecordDetailScreen extends StatefulWidget {
   final Directory recordDir;
@@ -25,7 +26,13 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   List<File> _boxPhotos = [];
   int _mainPhotoIndex = 0;
 
-  static const String _hotline = '1-800-CHK-MUNA';
+  /// The FDA Philippines public hotline — the number a user should actually
+  /// call to report a non-compliant product. This card used to show
+  /// `1-800-CHK-MUNA`, a made-up vanity number for this app, sitting under an
+  /// "FDA HOTLINE" heading: not a line anyone owns, and not the FDA's. The
+  /// same number is shown on the home screen and in the footer of every
+  /// exported PDF; keep the three in step if it ever changes.
+  static const String _hotline = '(02) 8807-0751';
 
   String _formatDate(DateTime dt) =>
       '${dt.year}-${_pad(dt.month)}-${_pad(dt.day)}  ${_pad(dt.hour)}:${_pad(dt.minute)}';
@@ -113,6 +120,14 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
             if (record.hasDamageData) ...[
               const SizedBox(height: 14),
               _damageCard(record),
+            ],
+
+            if (record.timings.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              TimingBreakdown(
+                timings: record.timings,
+                initiallyExpanded: true,
+              ),
             ],
 
             const SizedBox(height: 14),

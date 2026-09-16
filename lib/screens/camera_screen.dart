@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import '../main.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import '../models/scan_record.dart';
+import '../models/scan_timings.dart';
 import 'package:image/image.dart' as img;
 import '../services/app_storage.dart';
 import '../services/date_code_parser.dart';
@@ -26,6 +27,15 @@ typedef _DualRead = ({
   RecognizedText? original,
   RecognizedText? enhanced,
   CaptureQuality? quality,
+
+  /// Time spent in OcrPreprocessor (decode, quality assessment, enhancement,
+  /// temp-JPEG write) for this capture.
+  double preprocessMs,
+
+  /// Time spent inside ML Kit across [recognizeRuns] recognitions — two when
+  /// the enhanced path produced a file, one when preprocessing failed.
+  double recognizeMs,
+  int recognizeRuns,
 });
 
 /// What one label slot's capture turned into: the winning reading, the date it
@@ -66,7 +76,21 @@ class _SlotRead {
   final DateCode? dateCode;
   final CaptureQuality? quality;
 
-  const _SlotRead({this.text, this.dateCode, this.quality});
+  /// What this reading cost: ML Kit time across [recognizeRuns] recognitions,
+  /// and the preprocessing that fed them. Reported per slot on the result
+  /// screen and stored with the record.
+  final double recognizeMs;
+  final int recognizeRuns;
+  final double preprocessMs;
+
+  const _SlotRead({
+    this.text,
+    this.dateCode,
+    this.quality,
+    this.recognizeMs = 0,
+    this.recognizeRuns = 0,
+    this.preprocessMs = 0,
+  });
 }
 
 enum _CapturePhase { label, box }
@@ -202,22 +226,22 @@ class _CameraScreenState extends State<CameraScreen>
       (
       slot: BoxSlot.front,
       title: '$typeLabel — Front',
-      helper: 'Fill the frame with the whole front of the $lower',
+      helper: 'Fit the whole front of the $lower inside the guide',
       ),
       (
       slot: BoxSlot.side1,
       title: '$typeLabel — Side',
-      helper: 'Fill the frame with one side of the $lower',
+      helper: 'Fit one side of the $lower inside the guide',
       ),
       (
       slot: BoxSlot.side2,
       title: '$typeLabel — Other side',
-      helper: 'Fill the frame with the other side of the $lower',
+      helper: 'Fit the other side of the $lower inside the guide',
       ),
       (
       slot: BoxSlot.back,
       title: '$typeLabel — Back',
-      helper: 'Fill the frame with the whole back of the $lower',
+      helper: 'Fit the whole back of the $lower inside the guide',
       ),
     ];
   }
@@ -544,7 +568,12 @@ class _CameraScreenState extends State<CameraScreen>
 
     try {
       if (!_isLabelPhase) {
-        final path = await _captureCrop(cropToGuide: false);
+        // Cropped, not full-frame. The detector scores whatever it is handed,
+        // so a desk edge, a shadow, or a second pack sitting in the background
+        // is fair game for a "dent" — and those false positives are the main
+        // way a clean pack comes back damaged. Cutting the photo down to the
+        // rect the user framed is what makes the on-screen box mean something.
+        final path = await _captureCrop(cropToGuide: true);
         if (path == null) return;
         _boxPaths[_boxSlots[_slotIndex].slot] = path;
         await _advanceOrFinish();
@@ -682,6 +711,7 @@ class _CameraScreenState extends State<CameraScreen>
   Future<_OcrResult> _ocrLabelSlots() async {
     final textBySlot = <PhotoSlot, String>{};
     final buffer = StringBuffer();
+    final timings = ScanTimingsBuilder();
 
     double? nameConfidence;
     DateCode? dateCode;
@@ -692,6 +722,24 @@ class _CameraScreenState extends State<CameraScreen>
 
         final read =
             _slotReads[spec.slot] ?? await _readSlot(spec.slot, path);
+
+        // The cost of the reading that was actually used. On a multi-frame
+        // slot the frames that lost the vote are excluded on purpose: this is
+        // meant to answer "what does reading one label crop cost", and the
+        // frame count is a separate capture-strategy choice.
+        if (read.recognizeRuns > 0) {
+          timings.add(
+            TimingGroup.ocr,
+            '${spec.slot.timingLabel} recognition',
+            read.recognizeMs,
+            runs: read.recognizeRuns,
+          );
+        }
+        if (read.preprocessMs > 0) {
+          timings.add(TimingGroup.ocr, 'Crop preprocessing',
+              read.preprocessMs);
+        }
+
         final recognized = read.text;
         if (spec.slot == PhotoSlot.expiration) dateCode = read.dateCode;
         if (recognized == null) continue;
@@ -717,6 +765,7 @@ class _CameraScreenState extends State<CameraScreen>
       combinedText: buffer.toString(),
       nameConfidence: nameConfidence,
       dateCode: dateCode,
+      timings: timings.build(),
     );
   }
 
@@ -889,9 +938,21 @@ class _CameraScreenState extends State<CameraScreen>
         maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
       );
       return _SlotRead(
-          text: picked.text, dateCode: picked.code, quality: reads.quality);
+        text: picked.text,
+        dateCode: picked.code,
+        quality: reads.quality,
+        recognizeMs: reads.recognizeMs,
+        recognizeRuns: reads.recognizeRuns,
+        preprocessMs: reads.preprocessMs,
+      );
     }
-    return _SlotRead(text: _pickRicher(reads), quality: reads.quality);
+    return _SlotRead(
+      text: _pickRicher(reads),
+      quality: reads.quality,
+      recognizeMs: reads.recognizeMs,
+      recognizeRuns: reads.recognizeRuns,
+      preprocessMs: reads.preprocessMs,
+    );
   }
 
   /// Reads every frame of a capture and votes on the answer.
@@ -1036,6 +1097,7 @@ class _CameraScreenState extends State<CameraScreen>
       ) async {
     String? enhancedPath;
     CaptureQuality? quality;
+    final preWatch = Stopwatch()..start();
     try {
       final decoded = img.decodeImage(await File(path).readAsBytes());
       if (decoded != null) {
@@ -1061,13 +1123,23 @@ class _CameraScreenState extends State<CameraScreen>
     } catch (e) {
       debugPrint('OCR preprocessing failed for $path: $e');
     }
+    preWatch.stop();
 
     try {
+      final recognizeWatch = Stopwatch()..start();
       final original = await _recognizeFile(recognizer, path);
       final enhanced = enhancedPath == null
           ? null
           : await _recognizeFile(recognizer, enhancedPath);
-      return (original: original, enhanced: enhanced, quality: quality);
+      recognizeWatch.stop();
+      return (
+        original: original,
+        enhanced: enhanced,
+        quality: quality,
+        preprocessMs: preWatch.elapsedMicroseconds / 1000.0,
+        recognizeMs: recognizeWatch.elapsedMicroseconds / 1000.0,
+        recognizeRuns: enhancedPath == null ? 1 : 2,
+      );
     } finally {
       if (enhancedPath != null) {
         try {
@@ -1215,6 +1287,7 @@ class _CameraScreenState extends State<CameraScreen>
       textBySlot: ocr.textBySlot,
       combinedText: ocr.combinedText,
       ocrConfidence: ocr.nameConfidence,
+      ocrTimings: ocr.timings,
       dateCode: ocr.dateCode,
       expirationDeclaredMissing:
       _declaredMissing.contains(PhotoSlot.expiration),
@@ -1277,6 +1350,7 @@ class _CameraScreenState extends State<CameraScreen>
       packagingType: widget.packagingType!,
       boxPhotoPaths: _capturedBoxPaths,
       ocrConfidence: ocr.nameConfidence,
+      ocrTimings: ocr.timings,
       dateCode: ocr.dateCode,
       expirationDeclaredMissing:
       _declaredMissing.contains(PhotoSlot.expiration),
@@ -1764,7 +1838,7 @@ class _CameraScreenState extends State<CameraScreen>
                   child: IgnorePointer(
                     child: _GuideFrame(
                       size: _guideSize,
-                      showFrame: isLabelPhase,
+                      showScanLine: isLabelPhase,
                       zoomLabel: _currentZoom > _minZoom + 0.05
                           ? '${_currentZoom.toStringAsFixed(1)}x'
                           : null,
@@ -2233,11 +2307,16 @@ class _OcrResult {
 
   final DateCode? dateCode;
 
+  /// Per-slot ML Kit and preprocessing cost for the readings used, measured on
+  /// this device at capture time.
+  final ScanTimings timings;
+
   const _OcrResult({
     required this.textBySlot,
     required this.combinedText,
     required this.nameConfidence,
     this.dateCode,
+    this.timings = ScanTimings.empty,
   });
 }
 
@@ -2332,20 +2411,19 @@ class _GuideFrame extends StatelessWidget {
 
   final String? zoomLabel;
 
-  /// Whether to paint the corner brackets and the centre scan line.
+  /// Whether to paint the animated centre line across the guide.
   ///
-  /// They are drawn for label capture, where the still really is cropped to
-  /// this rect before OCR sees it — the box is a promise about what will be
-  /// kept. Damage capture keeps the full frame and the detector sweeps the
-  /// whole photo, so the same box would promise a crop that never happens and
-  /// push people into framing tighter than they need to. Off for damage; the
-  /// zoom pill still shows, since pinch-zoom works in both phases.
-  final bool showFrame;
+  /// The corner brackets are always drawn: both phases now crop the still to
+  /// this rect before anything looks at it, so the box is a real promise about
+  /// what will be kept. The line is decoration on top of that, and over the
+  /// larger damage guide it reads as clutter sitting across the pack, so it is
+  /// limited to label capture.
+  final bool showScanLine;
 
   const _GuideFrame({
     required this.size,
     this.zoomLabel,
-    this.showFrame = true,
+    this.showScanLine = true,
   });
 
   @override
@@ -2357,10 +2435,10 @@ class _GuideFrame extends StatelessWidget {
       height: size.height,
       child: Stack(
         children: [
-          if (showFrame) ...[
-            Positioned.fill(
-              child: CustomPaint(painter: _GuideCornerPainter(arm: arm)),
-            ),
+          Positioned.fill(
+            child: CustomPaint(painter: _GuideCornerPainter(arm: arm)),
+          ),
+          if (showScanLine)
             Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -2386,7 +2464,6 @@ class _GuideFrame extends StatelessWidget {
                 ),
               ),
             ),
-          ],
           if (zoomLabel != null)
             Align(
               alignment: Alignment.bottomCenter,

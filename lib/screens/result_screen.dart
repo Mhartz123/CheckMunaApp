@@ -5,6 +5,7 @@ import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
 import '../services/theme_controller.dart';
 import '../widgets/damage_overlay.dart';
+import '../widgets/timing_breakdown.dart';
 
 class ResultScreen extends StatelessWidget {
   final ScanRecord record;
@@ -217,6 +218,11 @@ class ResultScreen extends StatelessWidget {
                       damage: record.damageCheck,
                       boxPhotoPaths: boxPhotoPaths,
                     ),
+                  ],
+
+                  if (record.timings.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    TimingBreakdown(timings: record.timings),
                   ],
                 ],
               ),

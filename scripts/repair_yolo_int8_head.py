@@ -1,4 +1,4 @@
-"""Repair the YOLOv5nu INT8 export.
+"""Repair an Ultralytics YOLO INT8 export (YOLOv5nu, YOLOv8n, YOLO11n).
 
 Bug: the final Concat merges box coords (range 0..640) with sigmoid class
 scores (range 0..1), then a single per-tensor QuantizeLinear with
@@ -26,9 +26,16 @@ src, dst = sys.argv[1], sys.argv[2]
 m = onnx.load(src)
 g = m.graph
 
+# The Detect head's module index differs per architecture (YOLOv5nu: model.24,
+# YOLO11n: model.23, YOLOv8n: model.22), so find it from the final Concat that
+# feeds output0_QuantizeLinear instead of hard-coding it.
+tail_concat = next(n for n in g.node
+                   if "output0_QuantizeLinear_Input" in n.output)
+head = tail_concat.name.rsplit("/", 1)[0]  # e.g. "/model.23"
+
 DROP = {"output0_QuantizeLinear", "output0_DequantizeLinear",
-        "/model.24/Mul_2_output_0_QuantizeLinear",
-        "/model.24/Mul_2_output_0_DequantizeLinear"}
+        f"{head}/Mul_2_output_0_QuantizeLinear",
+        f"{head}/Mul_2_output_0_DequantizeLinear"}
 
 # Map each dropped Q/DQ node's output -> its input, so consumers bypass it.
 bypass = {}

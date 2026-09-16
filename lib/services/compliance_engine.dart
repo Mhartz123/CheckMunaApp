@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/scan_record.dart';
+import '../models/scan_timings.dart';
 import 'date_code_parser.dart';
 import 'fda_dataset_checker.dart';
 import 'label_parser.dart';
@@ -99,6 +100,7 @@ class ComplianceEngine {
     required Map<PhotoSlot, String> textBySlot,
     required String combinedText,
     double? ocrConfidence,
+    ScanTimings ocrTimings = ScanTimings.empty,
     DateCode? dateCode,
     bool expirationDeclaredMissing = false,
     bool ingredientsDeclaredMissing = false,
@@ -134,6 +136,7 @@ class ComplianceEngine {
       extractedText: combinedText,
       damageCheck: const DamageCheckResult.notPerformed(),
       packagingType: null,
+      timings: ocrTimings,
       scannedAt: DateTime.now(),
     );
   }
@@ -167,6 +170,7 @@ class ComplianceEngine {
       extractedText: '',
       damageCheck: damage,
       packagingType: packagingType,
+      timings: damage.timings,
       scannedAt: DateTime.now(),
     );
   }
@@ -184,6 +188,7 @@ class ComplianceEngine {
     required PackagingType packagingType,
     required List<String> boxPhotoPaths,
     double? ocrConfidence,
+    ScanTimings ocrTimings = ScanTimings.empty,
     DateCode? dateCode,
     bool expirationDeclaredMissing = false,
     bool ingredientsDeclaredMissing = false,
@@ -241,6 +246,7 @@ class ComplianceEngine {
       extractedText: combinedText,
       damageCheck: damage,
       packagingType: packagingType,
+      timings: _mergeTimings(ocrTimings, damage),
       scannedAt: DateTime.now(),
     );
   }
@@ -326,6 +332,18 @@ class ComplianceEngine {
       ) async {
     onStageChange?.call(ScanStage.checkingDamage);
     return PackagingDamageService.check(packagingType, boxPhotoPaths);
+  }
+
+  /// One timing list for a scan that ran both halves: the OCR stages measured
+  /// at capture time plus whatever the damage detector measured for itself.
+  static ScanTimings _mergeTimings(
+      ScanTimings ocrTimings, DamageCheckResult damage) {
+    if (damage.timings.isEmpty) return ocrTimings;
+    if (ocrTimings.isEmpty) return damage.timings;
+    final builder = ScanTimingsBuilder()
+      ..addAll(ocrTimings)
+      ..addAll(damage.timings);
+    return builder.build();
   }
 
   static bool _damageFails(DamageCheckResult damage) =>

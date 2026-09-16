@@ -4,21 +4,18 @@ import 'damage_detection_service.dart';
 /// ── HOW TO PLUG IN A NEW MODEL ──────────────────────────────────────────
 ///
 /// Damage detection is split one [PackagingDamageDetector] per
-/// [PackagingType], registered in [PackagingDamageService]. Only
-/// [PackagingType.box] has a real model today ([BoxDamageDetector], backed
-/// by the on-device YOLOv5nu ONNX model in `damage_detection_service.dart`).
-/// [PackagingType.foil] and [PackagingType.bottle] are placeholders
-/// ([FoilDamageDetector], [BottleDamageDetector]) that report themselves as
-/// unavailable — the capture flow, picker UI, and record storage for both
-/// are already fully wired up, so dropping in a real model later is a
+/// [PackagingType], registered in [PackagingDamageService].
+/// Every type has a real model ([BoxDamageDetector] / [FoilDamageDetector] /
+/// [BottleDamageDetector], backed by the on-device YOLO ONNX models in
+/// `damage_detection_service.dart`). Swapping in a different model is a
 /// two-step change and nothing else in the app needs to know:
 ///
 ///   1. Write a new class implementing [PackagingDamageDetector] (model load,
 ///      preprocessing, inference, and NMS/threshold logic all live inside
-///      it — [BoxDamageDetector] / `damage_detection_service.dart` is a
-///      template for the shape this usually takes).
-///   2. Register it in [PackagingDamageService._detectors] below, replacing
-///      the placeholder, e.g.:
+///      it — for another Ultralytics YOLO export, add a
+///      [DamageDetectionService] preset and wrap it like
+///      [BoxDamageDetector]).
+///   2. Register it in [PackagingDamageService._detectors] below, e.g.:
 ///         PackagingType.foil: FoilYoloDetector(),
 ///
 /// ComplianceEngine, CameraScreen, and every UI screen only ever go through
@@ -33,55 +30,46 @@ abstract class PackagingDamageDetector {
 
   /// Optional: kick off model loading early (see
   /// [PackagingDamageService.warmUp]). Default is a no-op for detectors with
-  /// nothing to preload (e.g. placeholders).
+  /// nothing to preload.
   Future<void> warmUp() async {}
 }
 
-/// The real, on-device YOLOv5nu detector for cardboard boxes. Thin wrapper
-/// around the existing [DamageDetectionService] so that service's
-/// preprocessing/inference/NMS logic doesn't need to move or change.
+/// The on-device YOLO11n detector for cardboard boxes. Thin wrapper around
+/// [DamageDetectionService.box], which owns preprocessing/inference/NMS.
 class BoxDamageDetector implements PackagingDamageDetector {
   @override
   Future<DamageCheckResult> check(List<String> photoPaths) =>
-      DamageDetectionService.check(photoPaths);
+      DamageDetectionService.box.check(photoPaths);
 
   @override
-  Future<void> warmUp() => DamageDetectionService.warmUp();
+  Future<void> warmUp() => DamageDetectionService.box.warmUp();
 }
 
-/// Placeholder for foil packaging (sachets, blister packs, etc). No model is
-/// wired up yet — every check reports [DamageCheckResult.available] = false
-/// with an explanatory message, exactly like a real detector reporting a
-/// load failure, so downstream UI needs no special-casing.
-class FoilDamageDetector extends PackagingDamageDetector {
+/// The on-device YOLOv5nu detector for foil packaging (sachets, blister
+/// packs). Thin wrapper around [DamageDetectionService.foil].
+class FoilDamageDetector implements PackagingDamageDetector {
   @override
-  Future<DamageCheckResult> check(List<String> photoPaths) async {
-    return const DamageCheckResult(
-      available: false,
-      message:
-      'Foil damage detection isn\'t available yet — no model has been '
-          'trained for this packaging type.',
-    );
-  }
+  Future<DamageCheckResult> check(List<String> photoPaths) =>
+      DamageDetectionService.foil.check(photoPaths);
+
+  @override
+  Future<void> warmUp() => DamageDetectionService.foil.warmUp();
 }
 
-/// Placeholder for bottle packaging. See [FoilDamageDetector] — same shape,
-/// swap in a real detector here once one exists.
-class BottleDamageDetector extends PackagingDamageDetector {
+/// The on-device YOLOv8n detector for bottles. Thin wrapper around
+/// [DamageDetectionService.bottle].
+class BottleDamageDetector implements PackagingDamageDetector {
   @override
-  Future<DamageCheckResult> check(List<String> photoPaths) async {
-    return const DamageCheckResult(
-      available: false,
-      message:
-      'Bottle damage detection isn\'t available yet — no model has been '
-          'trained for this packaging type.',
-    );
-  }
+  Future<DamageCheckResult> check(List<String> photoPaths) =>
+      DamageDetectionService.bottle.check(photoPaths);
+
+  @override
+  Future<void> warmUp() => DamageDetectionService.bottle.warmUp();
 }
 
 /// Facade the rest of the app calls through — routes each check to the
 /// detector registered for that [PackagingType]. See the module doc above
-/// for how to swap a placeholder for a real model.
+/// for how to swap in a different model.
 class PackagingDamageService {
   static final Map<PackagingType, PackagingDamageDetector> _detectors = {
     PackagingType.box: BoxDamageDetector(),

@@ -7,6 +7,7 @@ import 'package:image/image.dart' as img;
 import 'package:onnxruntime/onnxruntime.dart';
 
 import '../models/scan_record.dart';
+import '../models/scan_timings.dart';
 
 class _SingleImageResult {
   final bool isDamaged;
@@ -14,15 +15,23 @@ class _SingleImageResult {
   final List<DamageDetection> boxes;
   final double maxConfidence;
 
+  /// Time spent decoding and letterboxing this photo, and time spent in the
+  /// model itself — kept apart because they are two different costs with two
+  /// different fixes (photo resolution vs. model size).
+  final double preprocessMs;
+  final double inferenceMs;
+
   const _SingleImageResult({
     required this.isDamaged,
     required this.detections,
     required this.boxes,
     required this.maxConfidence,
+    required this.preprocessMs,
+    required this.inferenceMs,
   });
 }
 
-/// One decoded detection box (in 640×640 letterbox space) with its score and
+/// One decoded detection box (in model-input letterbox space) with its score and
 /// class index. Used for NMS overlap, then mapped back out of letterbox space
 /// into normalised source-image coordinates for the on-photo overlay — see
 /// [DamageDetectionService._checkOne].
@@ -41,14 +50,14 @@ class _Det {
 /// crop request.
 @immutable
 class _Preprocessed {
-  /// CHW float32, RGB, 0..1, shaped [1, 3, 640, 640] once wrapped in a tensor.
+  /// CHW float32, RGB, 0..1, shaped [1, 3, size, size] once wrapped in a tensor.
   final Float32List input;
 
   /// Dimensions of the orientation-baked source photo, for un-normalising.
   final int srcWidth, srcHeight;
 
   /// Letterbox transform the model saw: source pixels were multiplied by
-  /// [scale] and offset by [padX]/[padY] inside the 640×640 canvas.
+  /// [scale] and offset by [padX]/[padY] inside the square input canvas.
   final double scale;
   final int padX, padY;
 
@@ -85,58 +94,128 @@ class DamageModelException implements Exception {
   }
 }
 
-/// Packaging-damage check backed by an **on-device** YOLOv5nu model
-/// (`assets/box_damage_yolov5nu_int8.onnx`), run through the `onnxruntime`
-/// engine already bundled for the semantic matcher. No network, no API key, no
-/// per-scan cost — scans work fully offline.
+/// Packaging-damage check backed by an **on-device** Ultralytics YOLO model,
+/// run through the `onnxruntime` engine already bundled for the semantic
+/// matcher. No network, no API key, no per-scan cost — scans work fully
+/// offline.
 ///
-/// The weights are INT8-quantized (~3 MB, down from ~12 MB for the previous
-/// float YOLOv8n) with the detection head kept in float32 — see
+/// One instance per model: [box], [bottle] and [foil] below. Each is INT8-quantized
+/// (~3 MB) with the detection head kept in float32 — see
 /// `scripts/repair_yolo_int8_head.py` for why the head must stay float.
 ///
-/// Pipeline per box photo: decode → letterbox to 640 → CHW float32 (÷255) →
-/// model → decode the [1, 4+nc, 8400] output → confidence filter → class-aware
-/// NMS. Any surviving detection counts as damage; raw class names are preserved
-/// so downstream checks like [DamageCheckResult.hasScratch] keep working.
+/// Pipeline per photo: decode → letterbox to [inputSize] → CHW float32 (÷255)
+/// → model → decode the [1, 4+nc, anchors] output → confidence filter →
+/// class-aware NMS. Any surviving detection counts as damage; raw class names
+/// are preserved so downstream checks like [DamageCheckResult.hasScratch]
+/// keep working.
 ///
 /// Failures (bad decode, model load error) are reported through
 /// [DamageCheckResult.available] rather than thrown, so a scan still completes
 /// with damage marked unavailable.
 class DamageDetectionService {
-  static const String _modelAsset = 'assets/box_damage_yolov5nu_int8.onnx';
-  static const int _inputSize = 640;
-
-  /// Class index → display name, taken from the model's training metadata
-  /// (`names = {0: 'dents', 1: 'scratches'}`), title-cased for display. Keep in
-  /// sync if you retrain with different/added classes.
-  static const Map<int, String> _classNames = {0: 'Dent', 1: 'Scratches'};
-
-  /// Minimum class score for a detection to survive, and IoU above which two
-  /// same-class boxes are treated as duplicates during NMS.
+  /// Cardboard boxes: YOLO11n at 416 px (`results/boxes.onnx`, repaired).
   ///
-  /// 0.40 is the F1 optimum for this model, measured over 120 clean box photos
-  /// and 120 damaged ones: 79% recall at 81% precision (F1 0.798). Raise it to
-  /// 0.50 for a more conservative check (70% recall, 87% precision) if field
-  /// testing shows false positives are the bigger nuisance.
-  static const double _confThreshold = 0.40;
+  /// 0.35 measured over real photos: fires on 42 of 60 damaged boxes and 4 of
+  /// 60 clean ones. Test-set F1 0.53 / mAP50 0.51 (`results/Boxes`).
+  static final DamageDetectionService box = DamageDetectionService(
+    modelAsset: 'assets/box_damage_yolo11n_int8.onnx',
+    inputSize: 416,
+    // names = {0: 'Label_aberration', 1: 'Structural_Deformation'}
+    classNames: const {0: 'Label aberration', 1: 'Structural deformation'},
+    confThreshold: 0.35,
+    subject: 'box',
+  );
+
+  /// Bottles: YOLOv8n at 416 px (`results/bottles.onnx`, repaired).
+  ///
+  /// 0.35 is the F1 optimum of the bottle confidence sweep
+  /// (`results/Bottles/confidence_sweep.csv`: P 0.71, R 0.54, F1 0.61).
+  static final DamageDetectionService bottle = DamageDetectionService(
+    modelAsset: 'assets/bottle_damage_yolov8n_int8.onnx',
+    inputSize: 416,
+    // names = {0: 'label_abberation'}
+    classNames: const {0: 'Label aberration'},
+    confThreshold: 0.35,
+    subject: 'bottle',
+  );
+
+  /// Foil packaging (sachets, blister packs): YOLOv5nu at 416 px
+  /// (`results/Foils/model/yolov5nu_416_int8.onnx`, repaired).
+  ///
+  /// 0.25 from the foil confidence sweep (`results/Foils/csv/confidence_sweep.csv`:
+  /// P 0.71, R 0.82, F1 0.76) — within 0.003 F1 of the lowest thresholds but
+  /// with better precision.
+  ///
+  /// Class 0 is an explicit "No-Damage" class, so its boxes are skipped
+  /// rather than reported as damage.
+  static final DamageDetectionService foil = DamageDetectionService(
+    modelAsset: 'assets/foil_damage_yolov5nu_int8.onnx',
+    inputSize: 416,
+    // names = {0: 'No-Damage', 1: 'Structural_Deformation'}
+    classNames: const {0: 'No damage', 1: 'Structural deformation'},
+    nonDamageClasses: const {0},
+    confThreshold: 0.25,
+    subject: 'foil',
+  );
+
+  DamageDetectionService({
+    required this.modelAsset,
+    required this.inputSize,
+    required this.classNames,
+    required this.confThreshold,
+    required this.subject,
+    this.nonDamageClasses = const {},
+  });
+
+  final String modelAsset;
+
+  /// Square input side the model was exported at (its `imgsz` metadata).
+  final int inputSize;
+
+  /// Class index → display name, taken from the model's training metadata.
+  /// Keep in sync if you retrain with different/added classes.
+  final Map<int, String> classNames;
+
+  /// Class indices that mean "this region is fine" (e.g. a trained
+  /// No-Damage class). They are decoded and NMS'd like any other class, then
+  /// dropped before reporting so they never count as damage.
+  final Set<int> nonDamageClasses;
+
+  /// Minimum class score for a detection to survive.
+  final double confThreshold;
+
+  /// What the photos show, for log lines ("box", "bottle").
+  final String subject;
+
+  /// IoU above which two same-class boxes are treated as duplicates in NMS.
   static const double _iouThreshold = 0.45;
 
-  static Future<OrtSession>? _sessionLoad;
+  Future<OrtSession>? _sessionLoad;
+
+  /// How long the one-time session load took, measured when it happened.
+  ///
+  /// Kept on the instance rather than per check because the load is paid once
+  /// per app run — usually during warm-up, while the user is still framing
+  /// photos — and reporting it as part of the first scan only would make that
+  /// scan look arbitrarily slower than the ones after it. Every scan reports
+  /// it, labelled as the one-time cost it is.
+  double? _loadMs;
 
   /// Loads the ONNX session once; later calls reuse the same in-flight/loaded
   /// session. Safe to call from warm-up and from [check] concurrently.
-  static Future<OrtSession> _session() => _sessionLoad ??= _loadSession();
+  Future<OrtSession> _session() => _sessionLoad ??= _loadSession();
 
-  static Future<OrtSession> _loadSession() async {
+  Future<OrtSession> _loadSession() async {
+    final loadWatch = Stopwatch()..start();
     OrtEnv.instance.init();
 
     final Uint8List bytes;
     try {
-      bytes = (await rootBundle.load(_modelAsset)).buffer.asUint8List();
+      bytes = (await rootBundle.load(modelAsset)).buffer.asUint8List();
     } catch (e) {
       throw DamageModelException(
         'the model asset is missing from the app bundle',
-        'Check that $_modelAsset is listed under flutter/assets in '
+        'Check that $modelAsset is listed under flutter/assets in '
             'pubspec.yaml, then rebuild (a hot restart will not pick up a '
             'new asset).',
         e,
@@ -161,6 +240,10 @@ class DamageDetectionService {
     }
 
     _assertHeadAlive(session);
+    // Timed after the probe deliberately: the probe is a real inference run
+    // that has to finish before the model can be trusted, so its cost is part
+    // of what loading the model actually takes.
+    _loadMs = loadWatch.elapsedMicroseconds / 1000.0;
     return session;
   }
 
@@ -175,44 +258,15 @@ class DamageDetectionService {
   /// which is far worse than an honest failure. The first shipped YOLOv5nu
   /// export had precisely this defect.
   ///
-  /// So: push one mid-gray frame through and require at least one non-zero
-  /// class score. Float32 sigmoid never returns exactly 0 for a live head, so
-  /// an all-zero result is conclusive rather than merely suspicious.
-  static void _assertHeadAlive(OrtSession session) {
-    final probe = Float32List(3 * _inputSize * _inputSize)
-      ..fillRange(0, 3 * _inputSize * _inputSize, 114 / 255.0);
-    final tensor = OrtValueTensor.createTensorWithDataList(
-      probe,
-      [1, 3, _inputSize, _inputSize],
-    );
-    final runOptions = OrtRunOptions();
-    List<OrtValue?> outputs;
-    try {
-      outputs = session.run(runOptions, {'images': tensor}, const ['output0']);
-    } catch (e) {
-      throw DamageModelException(
-        'the model loaded but could not run',
-        'Inference failed on a blank frame, so no photo would work either. '
-            'Check that the input is named "images" and shaped [1,3,640,640] '
-            'and the output "output0".',
-        e,
-      );
-    } finally {
-      tensor.release();
-      runOptions.release();
-    }
-
-    try {
-      final channels = (outputs[0]!.value as List)[0] as List;
-      for (var c = 4; c < channels.length; c++) {
-        for (final v in (channels[c] as List)) {
-          if ((v as num) != 0) return; // head is alive
-        }
-      }
-    } finally {
-      for (final o in outputs) {
-        o?.release();
-      }
+  /// So: push a synthetic frame through and require at least one non-zero
+  /// class score. A flat gray frame is not enough — a healthy model can score
+  /// every anchor below the first quantization bucket (~0.002) on it — so try
+  /// a colour gradient, then fixed-seed noise. Both repaired 416 px models
+  /// score well above zero on at least one; a dead head scores exactly 0 on
+  /// everything, so an all-zero result is conclusive.
+  void _assertHeadAlive(OrtSession session) {
+    for (final probe in [_gradientProbe(), _noiseProbe()]) {
+      if (_probeHasScore(session, probe)) return; // head is alive
     }
 
     throw DamageModelException(
@@ -224,13 +278,74 @@ class DamageDetectionService {
     );
   }
 
+  Float32List _gradientProbe() {
+    final plane = inputSize * inputSize;
+    final data = Float32List(3 * plane);
+    for (var y = 0; y < inputSize; y++) {
+      for (var x = 0; x < inputSize; x++) {
+        final idx = y * inputSize + x;
+        data[idx] = x / inputSize;
+        data[plane + idx] = y / inputSize;
+        data[2 * plane + idx] = (x + y) / (2 * inputSize);
+      }
+    }
+    return data;
+  }
+
+  Float32List _noiseProbe() {
+    final data = Float32List(3 * inputSize * inputSize);
+    var state = 42;
+    for (var i = 0; i < data.length; i++) {
+      state = (state * 1103515245 + 12345) & 0x7fffffff;
+      data[i] = (state >> 16) / 32768.0;
+    }
+    return data;
+  }
+
+  bool _probeHasScore(OrtSession session, Float32List probe) {
+    final tensor = OrtValueTensor.createTensorWithDataList(
+      probe,
+      [1, 3, inputSize, inputSize],
+    );
+    final runOptions = OrtRunOptions();
+    List<OrtValue?> outputs;
+    try {
+      outputs = session.run(runOptions, {'images': tensor}, const ['output0']);
+    } catch (e) {
+      throw DamageModelException(
+        'the model loaded but could not run',
+        'Inference failed on a synthetic frame, so no photo would work either. '
+            'Check that the input is named "images" and shaped '
+            '[1,3,$inputSize,$inputSize] and the output "output0".',
+        e,
+      );
+    } finally {
+      tensor.release();
+      runOptions.release();
+    }
+
+    try {
+      final channels = (outputs[0]!.value as List)[0] as List;
+      for (var c = 4; c < channels.length; c++) {
+        for (final v in (channels[c] as List)) {
+          if ((v as num) != 0) return true;
+        }
+      }
+      return false;
+    } finally {
+      for (final o in outputs) {
+        o?.release();
+      }
+    }
+  }
+
   /// Kicks off the model load early (e.g. from CameraScreen.initState) so the
   /// first scan doesn't pay full load latency. Errors are swallowed — [check]
   /// re-reports them if loading truly failed.
-  static Future<void> warmUp() async {
+  Future<void> warmUp() async {
     try {
       await _session();
-      debugPrint('Damage model ready: $_modelAsset');
+      debugPrint('Damage model ready: $modelAsset');
     } catch (e) {
       // Logged in full here — including the suggested fix — because warm-up
       // runs the moment a packaging type is picked, well before the user
@@ -239,7 +354,7 @@ class DamageDetectionService {
     }
   }
 
-  static Future<DamageCheckResult> check(List<String> photoPaths) async {
+  Future<DamageCheckResult> check(List<String> photoPaths) async {
     if (photoPaths.isEmpty) {
       return const DamageCheckResult(
         available: false,
@@ -265,15 +380,28 @@ class DamageDetectionService {
     var anyDamaged = false;
     var anySucceeded = false;
     var maxConfidence = 0.0;
+    final timings = ScanTimingsBuilder();
+    // Reported on every scan, not only the one that paid it — see [_loadMs].
+    final loadMs = _loadMs;
+    if (loadMs != null) {
+      timings.add(TimingGroup.damageModel, '$subject model load (one-time)',
+          loadMs);
+    }
 
     for (var i = 0; i < photoPaths.length; i++) {
       final path = photoPaths[i];
       try {
         final result = await _checkOne(session, path, i);
         anySucceeded = true;
+        timings.add(TimingGroup.damageModel, 'Photo preprocessing',
+            result.preprocessMs);
+        timings.add(
+            TimingGroup.damageModel, 'Inference', result.inferenceMs);
         debugPrint('Damage[${i + 1}/${photoPaths.length}] '
             '${result.detections.isEmpty ? 'clean' : result.detections.join(', ')}'
-            ' (max ${(result.maxConfidence * 100).toStringAsFixed(0)}%)');
+            ' (max ${(result.maxConfidence * 100).toStringAsFixed(0)}%)'
+            ' in ${result.preprocessMs.round()} ms prep'
+            ' + ${result.inferenceMs.round()} ms inference');
         if (result.isDamaged) {
           anyDamaged = true;
           allDetections.addAll(result.detections);
@@ -286,13 +414,14 @@ class DamageDetectionService {
         debugPrint('Damage check failed for $path: $e');
       }
     }
-    debugPrint('Damage: scanned ${photoPaths.length} box photo(s); '
+    debugPrint('Damage: scanned ${photoPaths.length} $subject photo(s); '
         'damaged=$anyDamaged; classes=${allDetections.toSet()}');
 
     if (!anySucceeded) {
-      return const DamageCheckResult(
+      return DamageCheckResult(
         available: false,
         message: 'Damage check unavailable (inference failed).',
+        timings: timings.build(),
       );
     }
 
@@ -307,6 +436,7 @@ class DamageDetectionService {
       detections: allDetections,
       boxes: allBoxes,
       maxConfidence: maxConfidence,
+      timings: timings.build(),
     );
   }
 
@@ -314,10 +444,11 @@ class DamageDetectionService {
   ///
   /// Everything in here is pure Dart over a multi-megapixel still: the JPEG
   /// decode alone runs into seconds on a phone, and the CHW conversion walks
-  /// 409,600 pixels on top of that. On the UI isolate — where this used to
+  /// every input pixel on top of that. On the UI isolate — where this used to
   /// live — that is a hard freeze for the whole scan, which is exactly what
   /// made damage checks look like the app had hung.
-  static _Preprocessed _preprocessWorker(String path) {
+  static _Preprocessed _preprocessWorker((String, int) request) {
+    final (path, inputSize) = request;
     final bytes = File(path).readAsBytesSync();
     final decoded = img.decodeImage(bytes);
     if (decoded == null) {
@@ -325,26 +456,26 @@ class DamageDetectionService {
     }
     final oriented = img.bakeOrientation(decoded);
 
-    // ── Letterbox to 640×640 (preserve aspect ratio, pad with gray 114) ──
+    // ── Letterbox to a square (preserve aspect ratio, pad with gray 114) ──
     final scale =
-        math.min(_inputSize / oriented.width, _inputSize / oriented.height);
+        math.min(inputSize / oriented.width, inputSize / oriented.height);
     final newW = (oriented.width * scale).round();
     final newH = (oriented.height * scale).round();
     final resized = img.copyResize(oriented, width: newW, height: newH);
 
-    final canvas = img.Image(width: _inputSize, height: _inputSize);
+    final canvas = img.Image(width: inputSize, height: inputSize);
     img.fill(canvas, color: img.ColorRgb8(114, 114, 114));
-    final padX = ((_inputSize - newW) / 2).round();
-    final padY = ((_inputSize - newH) / 2).round();
+    final padX = ((inputSize - newW) / 2).round();
+    final padY = ((inputSize - newH) / 2).round();
     img.compositeImage(canvas, resized, dstX: padX, dstY: padY);
 
     // ── HWC uint8 → CHW float32, RGB, normalized 0..1 ──
-    final input = Float32List(3 * _inputSize * _inputSize);
-    final plane = _inputSize * _inputSize;
-    for (var y = 0; y < _inputSize; y++) {
-      for (var x = 0; x < _inputSize; x++) {
+    final input = Float32List(3 * inputSize * inputSize);
+    final plane = inputSize * inputSize;
+    for (var y = 0; y < inputSize; y++) {
+      for (var x = 0; x < inputSize; x++) {
         final p = canvas.getPixel(x, y);
-        final idx = y * _inputSize + x;
+        final idx = y * inputSize + x;
         input[idx] = p.r / 255.0; // R plane
         input[plane + idx] = p.g / 255.0; // G plane
         input[2 * plane + idx] = p.b / 255.0; // B plane
@@ -361,7 +492,7 @@ class DamageDetectionService {
     );
   }
 
-  /// Runs one box photo through the model and returns its surviving detections.
+  /// Runs one photo through the model and returns its surviving detections.
   ///
   /// [sourceIndex] is this photo's position in the caller's list; it rides
   /// along on every [DamageDetection] so an overlay can find the right image
@@ -372,18 +503,24 @@ class DamageDetectionService {
   /// onnxruntime package services on an isolate of its own. What is left on
   /// the caller's isolate is the output decode and NMS — a few thousand
   /// comparisons, small enough not to drop a frame.
-  static Future<_SingleImageResult> _checkOne(
+  Future<_SingleImageResult> _checkOne(
       OrtSession session, String path, int sourceIndex) async {
-    final pre = await compute(_preprocessWorker, path);
+    final preWatch = Stopwatch()..start();
+    final pre = await compute(_preprocessWorker, (path, inputSize));
+    // Wall-clock, so it includes spawning the isolate and copying the tensor
+    // back across it — that is the wait the user actually pays, not just the
+    // decode.
+    final preprocessMs = preWatch.elapsedMicroseconds / 1000.0;
     final scale = pre.scale;
     final padX = pre.padX;
     final padY = pre.padY;
 
     final inputTensor = OrtValueTensor.createTensorWithDataList(
       pre.input,
-      [1, 3, _inputSize, _inputSize],
+      [1, 3, inputSize, inputSize],
     );
     final runOptions = OrtRunOptions();
+    final inferWatch = Stopwatch()..start();
     List<OrtValue?> outputs;
     try {
       // runAsync hands the run to the package's own isolate and returns null
@@ -400,11 +537,15 @@ class DamageDetectionService {
             const ['output0'],
           );
     } finally {
+      inferWatch.stop();
       inputTensor.release();
       runOptions.release();
     }
+    // The forward pass only. Output decoding and NMS below are plain Dart over
+    // a few thousand anchors and are reported as neither.
+    final inferenceMs = inferWatch.elapsedMicroseconds / 1000.0;
 
-    // output0: [1, 4+nc, 8400] → strip batch, get the 4+nc channel rows.
+    // output0: [1, 4+nc, anchors] → strip batch, get the 4+nc channel rows.
     final channels = (outputs[0]!.value as List)[0] as List;
     for (final o in outputs) {
       o?.release();
@@ -424,7 +565,7 @@ class DamageDetectionService {
           bestCls = c;
         }
       }
-      if (bestScore < _confThreshold || bestCls < 0) continue;
+      if (bestScore < confThreshold || bestCls < 0) continue;
 
       final cx = (channels[0][a] as num).toDouble();
       final cy = (channels[1][a] as num).toDouble();
@@ -449,7 +590,8 @@ class DamageDetectionService {
         (((v - padY) / scale) / pre.srcHeight).clamp(0.0, 1.0);
 
     for (final d in kept) {
-      final label = _classNames[d.cls] ?? 'Damage';
+      if (nonDamageClasses.contains(d.cls)) continue;
+      final label = classNames[d.cls] ?? 'Damage';
       detections.add(label);
       if (d.score > maxConfidence) maxConfidence = d.score;
 
@@ -470,6 +612,8 @@ class DamageDetectionService {
       detections: detections,
       boxes: boxes,
       maxConfidence: maxConfidence,
+      preprocessMs: preprocessMs,
+      inferenceMs: inferenceMs,
     );
   }
 

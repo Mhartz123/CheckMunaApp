@@ -1,8 +1,75 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import '../models/scan_record.dart';
 import 'scan_store.dart';
+
+/// Downscale ladder for uploaded photos: longest edge in pixels, then JPEG
+/// quality. The first rung whose output fits [_maxImageBytes] wins; if none
+/// do, the smallest is sent anyway rather than nothing.
+///
+/// Top-level so [_downscaleWorker] can read them — it runs on a background
+/// isolate and can't reach [ReportService]'s private statics.
+const List<(int, int)> _downscaleSteps = [(900, 78), (720, 65), (560, 50)];
+
+/// Ceiling for one uploaded photo, before base64 (which adds about a third).
+/// The dashboard shows these at a few hundred pixels wide, so this is sized
+/// for the overlay to stay legible, not for archival quality — the full-
+/// resolution originals never leave the phone.
+const int _maxImageBytes = 200 * 1024;
+
+/// Shrinks each photo to a `data:image/jpeg;base64,...` URL, or null for one
+/// that can't be read or decoded.
+///
+/// Runs on a background isolate via [compute]: decoding and re-encoding four
+/// multi-megapixel stills is seconds of pure Dart, and submit is called
+/// straight after a save, while the user is looking at the result screen.
+///
+/// [img.bakeOrientation] applies the EXIF rotation and the re-encode drops the
+/// tag with it, so the uploaded bytes are already the right way up. That is
+/// what keeps the dashboard's damage overlay aligned: [DamageDetection]'s
+/// coordinates are normalised against the *oriented* photo, so a browser
+/// rotating the image a second time would slide every box off its damage.
+///
+/// The whole list is done in one call — [compute] spawns an isolate per
+/// invocation, and four of those costs more than the work itself.
+List<String?> _downscaleWorker(List<String> paths) =>
+    paths.map(_downscaleOne).toList();
+
+String? _downscaleOne(String path) {
+  try {
+    final decoded = img.decodeImage(File(path).readAsBytesSync());
+    if (decoded == null) return null;
+    final oriented = img.bakeOrientation(decoded);
+
+    Uint8List? smallest;
+    for (final (edge, quality) in _downscaleSteps) {
+      // Never upscale: a photo already smaller than the rung is re-encoded at
+      // that quality but keeps its dimensions.
+      final longest =
+          oriented.width > oriented.height ? oriented.width : oriented.height;
+      final scaled = longest <= edge
+          ? oriented
+          : img.copyResize(
+              oriented,
+              width: oriented.width >= oriented.height ? edge : null,
+              height: oriented.height > oriented.width ? edge : null,
+            );
+      final bytes = img.encodeJpg(scaled, quality: quality);
+      smallest = bytes;
+      if (bytes.lengthInBytes <= _maxImageBytes) break;
+    }
+    if (smallest == null) return null;
+    return 'data:image/jpeg;base64,${base64Encode(smallest)}';
+  } catch (_) {
+    // A photo that won't encode costs the dashboard a preview, not the
+    // record — the scan is already saved on the device either way.
+    return null;
+  }
+}
 
 /// Submits scan results to the CheckMuna central dashboard hosted on
 /// Vercel + Supabase.
@@ -32,10 +99,8 @@ class ReportService {
       'https://label-check-website.vercel.app/api/report';
 
   // Set to false to disable image uploads (saves bandwidth / Supabase storage).
+  // With this off the dashboard still gets every finding, just no previews.
   static const bool _includeImage = true;
-
-  // Max image size in bytes included in the payload (default 200 KB).
-  static const int _maxImageBytes = 200 * 1024;
   // ─────────────────────────────────────────────────────────────────────────
 
   /// Submit a scan result. Returns true on success, false on any failure.
@@ -64,7 +129,7 @@ class ReportService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       )
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 30));
 
       return response.statusCode == 200;
     } catch (e) {
@@ -73,22 +138,62 @@ class ReportService {
     }
   }
 
+  /// The packaging capture slot a photo came from ('front', 'side1', …), or
+  /// null for a file that isn't one of them. The dashboard captions a photo
+  /// with this; without it the photo is labelled by position instead.
+  static String? _slotName(File f) {
+    final base = p.basenameWithoutExtension(f.path);
+    for (final slot in BoxSlot.values) {
+      if (slot.fileBaseName == base) return slot.name;
+    }
+    return null;
+  }
+
   static Future<Map<String, dynamic>> _buildPayload({
     required Directory recordDir,
     required ScanRecord record,
     required String productName,
   }) async {
-    String? imageBase64;
+    // The packaging shots, in the order the detector was fed them — the order
+    // DamageDetection.sourceIndex indexes into.
+    final boxPhotos = ScanStore.boxPhotosInOrder(recordDir);
+    // The record's cover photo: the first label close-up, or the first
+    // packaging shot on a damage-only scan.
+    final all = ScanStore.photosInOrder(recordDir);
+    final cover = all.isNotEmpty ? all.first : null;
 
+    // Encoded once each. On a damage-only scan the cover *is* the first
+    // packaging shot, and shrinking a multi-megapixel still twice is a second
+    // of work for a byte-identical result.
+    var encoded = <String, String>{};
     if (_includeImage) {
-      final photos = ScanStore.photosInOrder(recordDir);
-      if (photos.isNotEmpty) {
-        final bytes = await photos.first.readAsBytes();
-        if (bytes.lengthInBytes <= _maxImageBytes) {
-          imageBase64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+      final paths = <String>{
+        if (cover != null) cover.path,
+        ...boxPhotos.map((f) => f.path),
+      }.toList();
+      if (paths.isNotEmpty) {
+        final results = await compute(_downscaleWorker, paths);
+        for (var i = 0; i < paths.length; i++) {
+          final data = results[i];
+          if (data != null) encoded[paths[i]] = data;
         }
       }
     }
+
+    final imageBase64 = cover == null ? null : encoded[cover.path];
+
+    // One entry per packaging photo, in capture order, INCLUDING any that
+    // failed to encode. The server numbers these by position and drops the
+    // empty ones, so a photo that couldn't be read leaves a gap rather than
+    // shifting every later photo out from under the detections that point at
+    // it by sourceIndex.
+    final images = boxPhotos.map((f) {
+      final data = encoded[f.path];
+      return {
+        'slot': _slotName(f),
+        if (data != null) 'imageBase64': data,
+      };
+    }).toList();
 
     final damage = record.damageCheck;
 
@@ -131,6 +236,9 @@ class ReportService {
           // from. Lets the dashboard redraw the overlay the app showed.
           'boxes': damage.boxes.map((b) => b.toJson()).toList(),
           'maxConfidence': damage.maxConfidence,
+          // The photos those boxes are drawn on. Without these the dashboard
+          // can say a box was dented but not show it.
+          if (_includeImage) 'images': images,
         },
     };
   }

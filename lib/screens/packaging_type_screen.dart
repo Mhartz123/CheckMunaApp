@@ -237,14 +237,15 @@ class _PackagingCard extends StatelessWidget {
   String get _description {
     switch (type) {
       case PackagingType.box:
-        return 'Photograph the box from four sides — we\'ll scan for dents '
-            'or scratches using the on-device model.';
+        return 'Photograph the box from four sides — we\'ll scan for label '
+            'aberrations or structural deformation using the on-device model.';
       case PackagingType.foil:
         return 'Photograph foil packaging (sachets, blister packs) from '
-            'four sides. Capture flow ready; detection model coming soon.';
+            'four sides — we\'ll scan for structural deformation using the '
+            'on-device model.';
       case PackagingType.bottle:
-        return 'Photograph the bottle from four sides. Capture flow ready; '
-            'detection model coming soon.';
+        return 'Photograph the bottle from four sides — we\'ll scan for label '
+            'aberrations using the on-device model.';
     }
   }
 

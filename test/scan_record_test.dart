@@ -178,10 +178,10 @@ void main() {
   });
 
   group('PackagingType', () {
-    test('only box has a model wired up today', () {
+    test('every packaging type has a model', () {
       expect(PackagingType.box.hasModel, isTrue);
-      expect(PackagingType.foil.hasModel, isFalse);
-      expect(PackagingType.bottle.hasModel, isFalse);
+      expect(PackagingType.foil.hasModel, isTrue);
+      expect(PackagingType.bottle.hasModel, isTrue);
     });
 
     test('labels are the user-facing names used across app and dashboard', () {
