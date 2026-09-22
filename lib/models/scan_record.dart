@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'damage_report.dart';
 import 'scan_timings.dart';
 
 /// Compliance classification for a saved record.
@@ -39,6 +40,33 @@ extension PackagingTypeX on PackagingType {
         return 'Bottle';
     }
   }
+
+  /// The packaging photos taken for this type, in capture order.
+  ///
+  /// Foil takes only the front and back: a sachet or blister sheet is flat,
+  /// so its edges are a few millimetres of seam, not panels that can carry
+  /// damage of their own, and photographing them just feeds the detector two
+  /// frames of mostly background.
+  List<BoxSlot> get captureSlots {
+    switch (this) {
+      case PackagingType.foil:
+        return const [BoxSlot.front, BoxSlot.back];
+      case PackagingType.box:
+      case PackagingType.bottle:
+        return BoxSlot.values;
+    }
+  }
+
+  /// Whether a missing ingredient list makes a product of this packaging
+  /// non-compliant.
+  ///
+  /// Not for foil: a sachet or blister strip is usually a unit dose cut from a
+  /// larger pack, and the full label — ingredient list included — lives on
+  /// the outer carton rather than on the foil itself. Failing a foil for the
+  /// absence of a list it was never expected to carry would flag compliant
+  /// product. Foil is still read for an ingredient list when one is printed;
+  /// its absence just stops counting against the verdict.
+  bool get requiresIngredientList => this != PackagingType.foil;
 
   /// Whether a real detection model is wired up for this packaging type yet.
   /// All three ship a model today; kept so the picker can grey a type out
@@ -92,11 +120,26 @@ extension PhotoSlotX on PhotoSlot {
 /// The four packaging-capture slots for the damage step. These are
 /// full-frame shots of the whole item (no crop, no OCR) sent to whichever
 /// [PackagingDamageDetector] handles the chosen [PackagingType] — a separate
-/// concern from the label slots above. Reused for every packaging type: the
-/// four-angle capture shape doesn't change, only which detector processes it.
+/// concern from the label slots above. Shared by every packaging type, but not
+/// every type uses all four — see [PackagingTypeX.captureSlots] (foil takes
+/// front and back only).
 enum BoxSlot { front, side1, side2, back }
 
 extension BoxSlotX on BoxSlot {
+  /// How this slot is named on screen and in the per-photo damage report.
+  String get label {
+    switch (this) {
+      case BoxSlot.front:
+        return 'Front';
+      case BoxSlot.side1:
+        return 'Side';
+      case BoxSlot.side2:
+        return 'Other side';
+      case BoxSlot.back:
+        return 'Back';
+    }
+  }
+
   String get fileBaseName {
     switch (this) {
       case BoxSlot.front:
@@ -201,6 +244,11 @@ class DamageCheckResult {
   /// check never ran, or for records saved before timings were measured.
   final ScanTimings timings;
 
+  /// Per-photo timings and confidences for this check, kept unaggregated —
+  /// see [DamageSessionReport]. Null when the check never ran, and for records
+  /// saved before the report existed.
+  final DamageSessionReport? report;
+
   const DamageCheckResult({
     required this.available,
     required this.message,
@@ -209,6 +257,7 @@ class DamageCheckResult {
     this.boxes = const [],
     this.maxConfidence = 0.0,
     this.timings = ScanTimings.empty,
+    this.report,
   });
 
   const DamageCheckResult.placeholder()
@@ -218,7 +267,8 @@ class DamageCheckResult {
         detections = const [],
         boxes = const [],
         maxConfidence = 0.0,
-        timings = ScanTimings.empty;
+        timings = ScanTimings.empty,
+        report = null;
 
   /// Used for label-only scans, where the damage check was never run because
   /// the user chose "Check Labels" rather than a damage-inclusive flow.
@@ -229,7 +279,8 @@ class DamageCheckResult {
         detections = const [],
         boxes = const [],
         maxConfidence = 0.0,
-        timings = ScanTimings.empty;
+        timings = ScanTimings.empty,
+        report = null;
 
   /// One line naming what was found and how sure the model was, e.g.
   /// "Dent x2 (up to 87%), Scratches (72%)". Falls back to the bare class
@@ -259,6 +310,7 @@ class DamageCheckResult {
     'boxes': boxes.map((b) => b.toJson()).toList(),
     'maxConfidence': maxConfidence,
     if (timings.isNotEmpty) 'timings': timings.toJson(),
+    if (report != null) 'report': report!.toJson(),
   };
 
   factory DamageCheckResult.fromJson(Map<String, dynamic>? json) {
@@ -275,6 +327,8 @@ class DamageCheckResult {
           const [],
       maxConfidence: (json['maxConfidence'] as num?)?.toDouble() ?? 0.0,
       timings: ScanTimings.fromJson(json['timings'] as List?),
+      report: DamageSessionReport.fromJson(
+          (json['report'] as Map?)?.cast<String, dynamic>()),
     );
   }
 }

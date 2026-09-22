@@ -5,7 +5,9 @@ import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
 import '../services/theme_controller.dart';
+import '../services/compliance_engine.dart';
 import '../widgets/damage_overlay.dart';
+import '../widgets/damage_report_view.dart';
 import '../widgets/timing_breakdown.dart';
 
 class RecordDetailScreen extends StatefulWidget {
@@ -120,6 +122,15 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
             if (record.hasDamageData) ...[
               const SizedBox(height: 14),
               _damageCard(record),
+            ],
+
+            if (record.damageCheck.report != null) ...[
+              const SizedBox(height: 14),
+              DamageReportView(
+                report: record.damageCheck.report,
+                failThreshold: ComplianceEngine.damageConfidenceThreshold,
+                initiallyExpanded: true,
+              ),
             ],
 
             if (record.timings.isNotEmpty) ...[

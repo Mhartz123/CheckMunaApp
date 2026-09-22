@@ -213,4 +213,59 @@ void main() {
     final doc = await ReportBuilder.buildFromDirs([]);
     expect((await doc.save()).length, greaterThan(1000));
   });
+
+  ScanRecord labelOnly(String name, ComplianceStatus status) => ScanRecord(
+    kind: ScanKind.label,
+    status: status,
+    matchedKeyword: '—',
+    reasons: const ['Product found in the FDA registry.'],
+    productName: name,
+    expiration: '2027-01-01',
+    ingredients: 'Apple cider vinegar',
+    extractedText: '',
+    packagingType: PackagingType.bottle,
+    damageCheck:
+        const DamageCheckResult(available: false, message: 'Not run.'),
+    scannedAt: DateTime.parse('2026-09-05T10:00:00.000'),
+  );
+
+  test('a label-only record listed in the summary gets its photos as evidence',
+      () async {
+    // Regression: evidence used to cover damaged packaging only, so a
+    // compliant label scan (e.g. "Apple Cider") was listed on page one with
+    // nothing behind it. Its label photos must now be embedded.
+    final withPhotos = writeRecord('Apple_Cider',
+        record: labelOnly('Apple Cider', ComplianceStatus.compliant),
+        photos: ['front', 'expiration', 'ingredients']);
+    final withoutPhotos = writeRecord('Apple_Cider_no_photos',
+        record: labelOnly('Apple Cider', ComplianceStatus.compliant));
+
+    final a = await (await ReportBuilder.buildFromDirs([withPhotos])).save();
+    final b =
+        await (await ReportBuilder.buildFromDirs([withoutPhotos])).save();
+    expect(a.length, greaterThan(b.length + 1500));
+  });
+
+  test('a filtered export builds with its filter summary and period',
+      () async {
+    final dir = writeRecord('Apple_Cider',
+        record: labelOnly('Apple Cider', ComplianceStatus.compliant),
+        photos: ['front']);
+    final doc = await ReportBuilder.buildFromDirs(
+      [dir],
+      filterSummary: 'Type: Label · Status: Compliant · Date: 2026',
+      periodStart: DateTime(2026),
+      periodEnd: DateTime(2026, 12, 31),
+    );
+    expect(utf8.decode((await doc.save()).sublist(0, 5)), startsWith('%PDF'));
+  });
+
+  test('an unreadable record still gets an evidence entry', () async {
+    final dir = Directory('${tmp.path}/Broken')..createSync();
+    File('${dir.path}/data.json').writeAsStringSync('{broken');
+    File('${dir.path}/front.jpg').writeAsBytesSync(
+        img.encodeJpg(img.Image(width: 400, height: 225)));
+    final doc = await ReportBuilder.buildFromDirs([dir]);
+    expect((await doc.save()).length, greaterThan(4000));
+  });
 }

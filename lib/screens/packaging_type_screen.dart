@@ -82,8 +82,7 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
       case CameraMode.damage:
         return 'Damage Detection: packaging photos only.';
       case CameraMode.label:
-
-        return 'Label check.';
+        return 'Check Labels: label photos only.';
     }
   }
 
@@ -147,6 +146,7 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
                     for (final type in PackagingType.values) ...[
                       _PackagingCard(
                         type: type,
+                        mode: widget.mode,
                         isLastUsed: type == _lastUsed,
                         onTap: () => _openCamera(context, type),
                       ),
@@ -225,23 +225,44 @@ class _HintBanner extends StatelessWidget {
 
 class _PackagingCard extends StatelessWidget {
   final PackagingType type;
+  final CameraMode mode;
   final bool isLastUsed;
   final VoidCallback onTap;
 
   const _PackagingCard({
     required this.type,
+    required this.mode,
     required this.isLastUsed,
     required this.onTap,
   });
 
-  String get _description {
+  /// What will happen after this card is tapped. A label check photographs
+  /// the label, not the packaging, so the damage-model copy would promise a
+  /// scan that never runs.
+  String get _description =>
+      mode == CameraMode.label ? _labelDescription : _damageDescription;
+
+  String get _labelDescription {
+    switch (type) {
+      case PackagingType.box:
+      case PackagingType.bottle:
+        return 'Photograph the product name, expiration date and ingredient '
+            'list printed on the ${type.label.toLowerCase()}.';
+      case PackagingType.foil:
+        return 'Photograph the product name and expiration date. Foil is not '
+            'required to carry an ingredient list, so a missing one is not '
+            'flagged.';
+    }
+  }
+
+  String get _damageDescription {
     switch (type) {
       case PackagingType.box:
         return 'Photograph the box from four sides — we\'ll scan for label '
             'aberrations or structural deformation using the on-device model.';
       case PackagingType.foil:
-        return 'Photograph foil packaging (sachets, blister packs) from '
-            'four sides — we\'ll scan for structural deformation using the '
+        return 'Photograph foil packaging (sachets, blister packs) front '
+            'and back — we\'ll scan for structural deformation using the '
             'on-device model.';
       case PackagingType.bottle:
         return 'Photograph the bottle from four sides — we\'ll scan for label '

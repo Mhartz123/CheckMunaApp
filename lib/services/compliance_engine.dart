@@ -20,13 +20,14 @@ import 'packaging_damage_service.dart';
 ///    deciding it. **Otherwise non-compliant if any of:** the
 ///    printed expiration date has passed (expired); the user verified no
 ///    expiration date is printed on the packaging; no ingredient list was
-///    detected, or the user verified none is printed on the packaging.
+///    detected, or the user verified none is printed on the packaging —
+///    except on foil, which is not required to carry one.
 ///    **Compliant** when none of the above fire.
 ///
 ///  • [analyzeDamage] — damage-only. Runs whichever [PackagingDamageDetector]
 ///    is registered for the given [PackagingType] (see
 ///    `packaging_damage_service.dart`). **Non-compliant** if it reports
-///    damage at or above [_damageConfidenceThreshold].
+///    damage at or above [damageConfidenceThreshold].
 ///    **Compliant** otherwise — including when the detector isn't available
 ///    (e.g. a packaging type with no model yet), since there's nothing to
 ///    flag.
@@ -62,10 +63,28 @@ class ComplianceEngine {
   /// a held-out set. See [OnnxSemanticMatcher].
   static const bool _semanticMatcherEnabled = false;
 
+  /// The FDA advisory-list check — the dataset tier, and with it the only
+  /// route to [ComplianceStatus.warning].
+  ///
+  /// DISABLED because the bundled list (`assets/data/fda_advisories.json`)
+  /// has not been cleaned yet, and it is false-flagging legitimate products.
+  /// Its word-overlap matching was built for recall against noisy OCR, so a
+  /// list still carrying generic entries matches ordinary product names —
+  /// and every such match turns a scan into a Warning.
+  ///
+  /// While off: no scan can come back Warning, the 20.8k-entry list is not
+  /// loaded, and the verdict rests on the expiry, ingredient-list and damage
+  /// checks alone. The semantic tier stays off too, since it only runs
+  /// behind this one. Set true once the dataset is cleaned.
+  static const bool _advisoryDatasetEnabled = false;
+
   /// Mean OCR confidence (per ML Kit, 0..1) on the product-name crop below
   /// which the name is treated as unreliable, opening the semantic fallback.
   static const double _lowOcrConfidenceThreshold = 0.6;
 
+  /// Public so the damage report can draw the line a detection has to cross
+  /// to fail a scan, rather than restating the number in the UI.
+  ///
   /// Minimum damage-detection confidence (0..1) for packaging damage to
   /// count as non-compliant. This is the single gate: every damage class the
   /// shipped models emit is judged on confidence alone.
@@ -74,7 +93,7 @@ class ComplianceEngine {
   /// `damage_detection_service.dart`): the detector decides what counts as a
   /// detection worth drawing on the photo, and this decides what counts as
   /// bad enough to fail the scan.
-  static const double _damageConfidenceThreshold = 0.70;
+  static const double damageConfidenceThreshold = 0.70;
 
   /// Kicks off the model + FDA dataset asset loads early (e.g. from
   /// CameraScreen.initState) so the first scan's analyze call isn't stuck
@@ -83,8 +102,10 @@ class ComplianceEngine {
   /// has picked one) to also warm that packaging type's damage detector;
   /// omit it for a label-only scan, which has no damage step to warm.
   static void warmUp({PackagingType? packagingType}) {
-    // ignore: unawaited_futures
-    FdaDatasetChecker.ensureLoaded();
+    if (_advisoryDatasetEnabled) {
+      // ignore: unawaited_futures
+      FdaDatasetChecker.ensureLoaded();
+    }
     if (_semanticMatcherEnabled) {
       // ignore: unawaited_futures
       OnnxSemanticMatcher.instance();
@@ -112,6 +133,7 @@ class ComplianceEngine {
     DateCode? dateCode,
     bool expirationDeclaredMissing = false,
     bool ingredientsDeclaredMissing = false,
+    PackagingType? packagingType,
     void Function(ScanStage stage)? onStageChange,
   }) async {
     final _LabelSignals s = await _computeLabelSignals(
@@ -121,6 +143,7 @@ class ComplianceEngine {
       dateCode: dateCode,
       expirationDeclaredMissing: expirationDeclaredMissing,
       ingredientsDeclaredMissing: ingredientsDeclaredMissing,
+      ingredientsRequired: packagingType?.requiresIngredientList ?? true,
       onStageChange: onStageChange,
     );
 
@@ -143,7 +166,7 @@ class ComplianceEngine {
       ingredients: s.fields.ingredients,
       extractedText: combinedText,
       damageCheck: const DamageCheckResult.notPerformed(),
-      packagingType: null,
+      packagingType: packagingType,
       timings: ocrTimings,
       scannedAt: DateTime.now(),
     );
@@ -157,10 +180,11 @@ class ComplianceEngine {
   static Future<ScanRecord> analyzeDamage({
     required PackagingType packagingType,
     required List<String> boxPhotoPaths,
+    List<String>? boxPhotoLabels,
     void Function(ScanStage stage)? onStageChange,
   }) async {
-    final damage =
-    await _computeDamage(packagingType, boxPhotoPaths, onStageChange);
+    final damage = await _computeDamage(
+        packagingType, boxPhotoPaths, boxPhotoLabels, onStageChange);
     final bool damageFails = _damageFails(damage);
 
     final ComplianceStatus status = damageFails
@@ -195,6 +219,7 @@ class ComplianceEngine {
     required String combinedText,
     required PackagingType packagingType,
     required List<String> boxPhotoPaths,
+    List<String>? boxPhotoLabels,
     double? ocrConfidence,
     ScanTimings ocrTimings = ScanTimings.empty,
     DateCode? dateCode,
@@ -209,10 +234,11 @@ class ComplianceEngine {
       dateCode: dateCode,
       expirationDeclaredMissing: expirationDeclaredMissing,
       ingredientsDeclaredMissing: ingredientsDeclaredMissing,
+      ingredientsRequired: packagingType.requiresIngredientList,
       onStageChange: onStageChange,
     );
-    final damage =
-    await _computeDamage(packagingType, boxPhotoPaths, onStageChange);
+    final damage = await _computeDamage(
+        packagingType, boxPhotoPaths, boxPhotoLabels, onStageChange);
     final bool damageFails = _damageFails(damage);
 
     final ComplianceStatus status = s.advisoryFlagged
@@ -268,15 +294,17 @@ class ComplianceEngine {
     DateCode? dateCode,
     required bool expirationDeclaredMissing,
     required bool ingredientsDeclaredMissing,
+    required bool ingredientsRequired,
     void Function(ScanStage stage)? onStageChange,
   }) async {
     onStageChange?.call(ScanStage.matchingRegistry);
-    await FdaDatasetChecker.ensureLoaded();
-
     final LabelFields fields = LabelParser.parse(textBySlot);
-    final FdaMatchOutcome advisoryOutcome =
-    FdaDatasetChecker.matchOutcome(combinedText);
-    final FdaAdvisoryMatch? advisoryMatch = advisoryOutcome.match;
+
+    FdaAdvisoryMatch? advisoryMatch;
+    if (_advisoryDatasetEnabled) {
+      await FdaDatasetChecker.ensureLoaded();
+      advisoryMatch = FdaDatasetChecker.matchOutcome(combinedText).match;
+    }
 
     // Last-ditch semantic name check: runs ONLY when the product-name OCR was
     // unreliable *and* the dataset tier produced no confident match.
@@ -285,7 +313,10 @@ class ComplianceEngine {
     final bool ocrUnreliable =
         ocrConfidence != null && ocrConfidence < _lowOcrConfidenceThreshold;
     final bool runSemantic =
-        _semanticMatcherEnabled && ocrUnreliable && advisoryMatch == null;
+        _advisoryDatasetEnabled &&
+            _semanticMatcherEnabled &&
+            ocrUnreliable &&
+            advisoryMatch == null;
     if (runSemantic) {
       try {
         final matcher = await OnnxSemanticMatcher.instance();
@@ -317,8 +348,13 @@ class ComplianceEngine {
     // The user can verify on-camera that an element simply isn't printed on the
     // packaging; that declaration alone fails compliance (the label is absent),
     // independent of whatever OCR did or didn't read.
-    final bool ingredientsMissing =
-        ingredientsDeclaredMissing || !fields.ingredientsPresent;
+    //
+    // Only where the packaging is expected to carry one at all — see
+    // PackagingTypeX.requiresIngredientList. Clearing the flag here, at the
+    // source, keeps the verdict, the reasons, the tags and the matched-keyword
+    // line consistent with each other, rather than patching each consumer.
+    final bool ingredientsMissing = ingredientsRequired &&
+        (ingredientsDeclaredMissing || !fields.ingredientsPresent);
 
     return _LabelSignals(
       fields: fields,
@@ -336,10 +372,12 @@ class ComplianceEngine {
   static Future<DamageCheckResult> _computeDamage(
       PackagingType packagingType,
       List<String> boxPhotoPaths,
+      List<String>? boxPhotoLabels,
       void Function(ScanStage stage)? onStageChange,
       ) async {
     onStageChange?.call(ScanStage.checkingDamage);
-    return PackagingDamageService.check(packagingType, boxPhotoPaths);
+    return PackagingDamageService.check(packagingType, boxPhotoPaths,
+        photoLabels: boxPhotoLabels);
   }
 
   /// One timing list for a scan that ran both halves: the OCR stages measured
@@ -357,7 +395,7 @@ class ComplianceEngine {
   static bool _damageFails(DamageCheckResult damage) =>
       damage.available &&
           damage.isDamaged &&
-          damage.maxConfidence >= _damageConfidenceThreshold;
+          damage.maxConfidence >= damageConfidenceThreshold;
 
   /// Names what the detector found and how sure it was, e.g.
   /// "Packaging damage — Structural deformation detected (84% confidence)."

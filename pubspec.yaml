@@ -35,6 +35,6 @@ flutter:
     - assets/fda_index_embeddings_fp16.npy
     - assets/fda_index_names.txt
     # On-device YOLO (INT8) packaging-damage detectors, one per packaging type.
-    - assets/box_damage_yolo11n_int8.onnx
-    - assets/bottle_damage_yolov8n_int8.onnx
-    - assets/foil_damage_yolov5nu_int8.onnx
+    - assets/box_damage_yolo11n_640_int8.onnx
+    - assets/bottle_damage_yolov8n_640_int8.onnx
+    - assets/foil_damage_yolov5nu_640_int8.onnx

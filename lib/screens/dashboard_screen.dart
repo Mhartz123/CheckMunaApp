@@ -5,9 +5,12 @@ import 'package:path/path.dart' as p;
 import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
+import '../services/app_prefs.dart';
 import '../widgets/capture_tips.dart';
+import '../widgets/compliance_legend.dart';
 import '../widgets/theme_toggle_button.dart';
 import 'camera_screen.dart';
+import 'consent_screen.dart';
 import 'packaging_type_screen.dart';
 import 'record_detail_screen.dart';
 
@@ -27,10 +30,11 @@ class _RecentScan {
   });
 }
 
-/// The Homepage tab. Replaces the old always-mounted Scan tab — Label
-/// checking opens the camera directly; Damage Detection and Inspection Mode
-/// first go through PackagingTypeScreen to pick Box/Foil/Bottle, since both
-/// include a damage step.
+/// The Homepage tab. Replaces the old always-mounted Scan tab. All three scan
+/// cards first go through PackagingTypeScreen to pick Box/Foil/Bottle: the
+/// damage step needs it to choose a model, and the label check needs it
+/// because what a label must carry depends on the packaging (foil is not
+/// required to print an ingredient list).
 ///
 /// Below the three scan cards sits a recent-scans strip: the three newest
 /// saved records, each tapping through to RecordDetailScreen. It reloads
@@ -66,6 +70,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _totalScans = 0;
   int _compliantCount = 0;
   int _flaggedCount = 0; // non-compliant + warning
+  // Scans saved since local midnight. Kept as a secondary figure beside the
+  // lifetime totals — occasional users get little from a daily count alone.
+  int _todayCount = 0;
 
   @override
   void initState() {
@@ -91,11 +98,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ..sort((a, b) => b.date.compareTo(a.date));
 
       // Tally every readable record for the summary card.
-      var total = 0, compliant = 0, flagged = 0;
+      var total = 0, compliant = 0, flagged = 0, today = 0;
+      final now = DateTime.now();
+      final midnight = DateTime(now.year, now.month, now.day);
       for (final s in scans) {
         final r = s.record;
         if (r == null) continue; // unreadable: counts toward nothing
         total++;
+        if (!r.scannedAt.isBefore(midnight)) today++;
         switch (r.status) {
           case ComplianceStatus.compliant:
             compliant++;
@@ -113,6 +123,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _totalScans = total;
         _compliantCount = compliant;
         _flaggedCount = flagged;
+        _todayCount = today;
         _loadingRecent = false;
       });
     } catch (_) {
@@ -122,6 +133,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _totalScans = 0;
         _compliantCount = 0;
         _flaggedCount = 0;
+        _todayCount = 0;
         _loadingRecent = false;
       });
     }
@@ -134,10 +146,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       MaterialPageRoute(builder: (_) => page),
     );
     await _loadRecent();
-  }
-
-  void _openLabelCamera(BuildContext context) {
-    _pushThenReload(const CameraScreen(mode: CameraMode.label));
   }
 
   void _openPackagingPicker(BuildContext context, CameraMode mode) {
@@ -192,6 +200,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   // so all three stay in sync.
                   ThemeToggleButton(compact: true),
                   const SizedBox(width: 4),
+                  // Data-sharing notice and the user's current choice; the
+                  // icon itself says whether scans are being uploaded.
+                  AnimatedBuilder(
+                    animation: AppPrefs.instance,
+                    builder: (context, _) {
+                      final sharing = AppPrefs.instance.sharingAllowed;
+                      return IconButton(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const ConsentScreen()),
+                        ),
+                        icon: Icon(sharing
+                            ? Icons.cloud_upload_outlined
+                            : Icons.cloud_off_outlined),
+                        color: AppColors.muted,
+                        iconSize: 20,
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                            minWidth: 36, minHeight: 36),
+                        tooltip: sharing
+                            ? 'Data sharing: on'
+                            : 'Data sharing: off',
+                      );
+                    },
+                  ),
+                  // Legend — the verdict colours, one tap away without
+                  // going back through onboarding.
+                  IconButton(
+                    onPressed: () => showLegendSheet(context),
+                    icon: const Icon(Icons.info_outline),
+                    color: AppColors.muted,
+                    iconSize: 20,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                        minWidth: 36, minHeight: 36),
+                    tooltip: 'Legend',
+                  ),
                   // Photo tips moved here from the old always-visible
                   // banner, so the guidance is one tap away instead of
                   // permanently occupying the top of the screen.
@@ -216,8 +263,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
                 child: Column(
                   children: [
-                    // Summary card — today's tallies across all records.
+                    // Summary card — lifetime tallies across all records.
                     _SummaryCard(
+                      today: _todayCount,
                       scans: _totalScans,
                       compliant: _compliantCount,
                       flagged: _flaggedCount,
@@ -229,7 +277,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       iconColor: AppColors.labelKind,
                       title: 'Check Labels',
                       subtitle: 'Verify against FDA registry',
-                      onTap: () => _openLabelCamera(context),
+                      onTap: () =>
+                          _openPackagingPicker(context, CameraMode.label),
                     ),
                     const SizedBox(height: 10),
                     _DashboardCard(
@@ -268,16 +317,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-/// The green summary card at the top of Home: today's tallies (Scans /
-/// Compliant / Flagged) across all saved records. Uses the accent gradient
+/// The green summary card at the top of Home: lifetime tallies (Scans /
+/// Compliant / Flagged) across all saved records, with today's count as a
+/// small secondary figure. Uses the accent gradient
 /// so it reads as the primary status surface, matching the mockup.
 class _SummaryCard extends StatelessWidget {
+  final int today;
   final int scans;
   final int compliant;
   final int flagged;
   final bool loading;
 
   const _SummaryCard({
+    required this.today,
     required this.scans,
     required this.compliant,
     required this.flagged,
@@ -301,19 +353,41 @@ class _SummaryCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            'TODAY',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.85),
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.0,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'LIFETIME',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  loading ? 'Today: —' : 'Today: $today',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              _stat(loading ? '—' : '$scans', 'Scans'),
+              _stat(loading ? '—' : '$scans', 'Lifetime scans'),
               _divider(),
               _stat(loading ? '—' : '$compliant', 'Compliant'),
               _divider(),

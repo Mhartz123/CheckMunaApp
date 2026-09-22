@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
@@ -10,6 +11,31 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../services/report_builder.dart';
 
+/// One saved record, parsed once per load.
+///
+/// The list used to call [ScanStore.load] from the filter, from every sort
+/// comparison and again from every card's build — fine for twenty records,
+/// seconds of disk reads for a thousand. Now each data.json is read exactly
+/// once in [RecordsScreenState.loadFiles] and everything else works on this.
+class _Entry {
+  final Directory dir;
+  final String name;
+
+  /// Null when data.json is missing or unreadable. Such a record still lists
+  /// under the "All" type so it can be found and deleted.
+  final ScanRecord? record;
+  final DateTime date;
+
+  const _Entry({
+    required this.dir,
+    required this.name,
+    required this.record,
+    required this.date,
+  });
+}
+
+enum _DatePreset { any, today, last7, last30, thisYear, lastYear, custom }
+
 class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});
 
@@ -18,9 +44,16 @@ class RecordsScreen extends StatefulWidget {
 }
 
 class RecordsScreenState extends State<RecordsScreen> {
-  List<Directory> _allDirs = [];
-  List<Directory> _filtered = [];
-  String _sortBy = 'Name';
+  /// Records shown per page. Long histories are paged rather than one endless
+  /// scroll, so record 900 is a few taps away instead of a long fling.
+  static const int _pageSize = 20;
+
+  List<_Entry> _all = [];
+  List<_Entry> _filtered = [];
+  int _page = 0;
+  final ScrollController _scroll = ScrollController();
+
+  String _sortBy = 'Date';
   bool _nameAscending = true;
   bool _dateNewest = true;
   String _complianceFilter = '';
@@ -29,8 +62,14 @@ class RecordsScreenState extends State<RecordsScreen> {
   bool _isSelecting = false;
   bool _loading = true;
 
-  static const List<String> _kindCycle = ['Label', 'Damage', 'Inspect'];
-  String _kindFilterLabel = 'Label';
+  /// Null means every scan type.
+  ScanKind? _kindFilter;
+
+  _DatePreset _datePreset = _DatePreset.any;
+
+  /// Inclusive start / exclusive end of the date filter, or null for "any".
+  DateTime? _dateStart;
+  DateTime? _dateEnd;
 
   @override
   void initState() {
@@ -40,14 +79,27 @@ class RecordsScreenState extends State<RecordsScreen> {
 
   @override
   void dispose() {
+    _scroll.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   Future<void> loadFiles() async {
     setState(() => _loading = true);
     try {
-      _allDirs = await ScanStore.listRecordDirs();
-      _applySort();
+      final dirs = await ScanStore.listRecordDirs();
+      _all = dirs.map((dir) {
+        final record = ScanStore.load(dir);
+        return _Entry(
+          dir: dir,
+          name: p.basename(dir.path),
+          record: record,
+          date: record?.scannedAt ?? dir.statSync().modified,
+        );
+      }).toList();
+      // Keep the current page on a reload (e.g. after a delete) when it
+      // still exists; _applySort clamps it otherwise.
+      _applySort(resetPage: false);
     } catch (e) {
       debugPrint('Load files error: $e');
     } finally {
@@ -55,71 +107,283 @@ class RecordsScreenState extends State<RecordsScreen> {
     }
   }
 
-  ScanKind get _kindFilterValue {
-    switch (_kindFilterLabel) {
-      case 'Damage':
-        return ScanKind.damage;
-      case 'Inspect':
-        return ScanKind.both;
-      default:
-        return ScanKind.label;
+  // ── Filters ──────────────────────────────────────────────────────────────
+
+  static String _kindName(ScanKind? kind) {
+    switch (kind) {
+      case null:
+        return 'All';
+      case ScanKind.label:
+        return 'Label';
+      case ScanKind.damage:
+        return 'Damage';
+      case ScanKind.both:
+        return 'Inspect';
     }
   }
 
-  Color get _kindFilterColor {
-    switch (_kindFilterLabel) {
-      case 'Damage':
-        return AppColors.damageKind;
-      case 'Inspect':
-        return AppColors.inspection;
-      default:
+  static Color _kindColor(ScanKind? kind) {
+    switch (kind) {
+      case null:
+        return AppColors.accentLight;
+      case ScanKind.label:
         return AppColors.labelKind;
+      case ScanKind.damage:
+        return AppColors.damageKind;
+      case ScanKind.both:
+        return AppColors.inspection;
     }
   }
 
-  void _cycleKindFilter() {
-    final idx = _kindCycle.indexOf(_kindFilterLabel);
-    setState(() => _kindFilterLabel = _kindCycle[(idx + 1) % _kindCycle.length]);
+  static String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  String get _dateLabel {
+    switch (_datePreset) {
+      case _DatePreset.any:
+        return 'Any date';
+      case _DatePreset.today:
+        return 'Today';
+      case _DatePreset.last7:
+        return 'Last 7 days';
+      case _DatePreset.last30:
+        return 'Last 30 days';
+      case _DatePreset.thisYear:
+      case _DatePreset.lastYear:
+        return '${_dateStart!.year}';
+      case _DatePreset.custom:
+        final last = _dateEnd!.subtract(const Duration(days: 1));
+        return _fmtDate(_dateStart!) == _fmtDate(last)
+            ? _fmtDate(_dateStart!)
+            : '${_fmtDate(_dateStart!)} – ${_fmtDate(last)}';
+    }
+  }
+
+  bool get _hasActiveFilters =>
+      _kindFilter != null ||
+      _complianceFilter.isNotEmpty ||
+      _datePreset != _DatePreset.any ||
+      _searchQuery.isNotEmpty;
+
+  /// Human-readable description of the active filters, printed on the PDF so
+  /// a reader knows exactly which subset of records it covers.
+  String get _filterSummary {
+    final parts = <String>[
+      if (_kindFilter != null) 'Type: ${_kindName(_kindFilter)}',
+      if (_complianceFilter.isNotEmpty)
+        'Status: ${ScanRecord.isWarningLabel(_complianceFilter) ? 'Warning' : _complianceFilter == 'COMPLIANT' ? 'Compliant' : 'Non-Compliant'}',
+      if (_datePreset != _DatePreset.any) 'Date: $_dateLabel',
+      if (_searchQuery.isNotEmpty) 'Name contains "$_searchQuery"',
+    ];
+    return parts.join(' · ');
+  }
+
+  void _setDatePreset(_DatePreset preset, {DateTimeRange? custom}) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    DateTime? start;
+    DateTime? end;
+    switch (preset) {
+      case _DatePreset.any:
+        break;
+      case _DatePreset.today:
+        start = today;
+        end = tomorrow;
+        break;
+      case _DatePreset.last7:
+        start = today.subtract(const Duration(days: 6));
+        end = tomorrow;
+        break;
+      case _DatePreset.last30:
+        start = today.subtract(const Duration(days: 29));
+        end = tomorrow;
+        break;
+      case _DatePreset.thisYear:
+        start = DateTime(now.year);
+        end = DateTime(now.year + 1);
+        break;
+      case _DatePreset.lastYear:
+        start = DateTime(now.year - 1);
+        end = DateTime(now.year);
+        break;
+      case _DatePreset.custom:
+        start = DateTime(
+            custom!.start.year, custom.start.month, custom.start.day);
+        end = DateTime(custom.end.year, custom.end.month, custom.end.day)
+            .add(const Duration(days: 1));
+        break;
+    }
+    setState(() {
+      _datePreset = preset;
+      _dateStart = start;
+      _dateEnd = end;
+    });
     _applySort();
   }
 
-  void _applySort() {
-    List<Directory> list = List.from(_allDirs);
-    if (_searchQuery.isNotEmpty) {
-      list = list
-          .where((d) => p.basename(d.path)
-          .toLowerCase()
-          .contains(_searchQuery.toLowerCase()))
-          .toList();
+  Future<void> _pickDateFilter() async {
+    final now = DateTime.now();
+    final choice = await showModalBottomSheet<_DatePreset>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        Widget option(_DatePreset preset, String label, IconData icon) {
+          final selected = preset == _datePreset;
+          return ListTile(
+            leading: Icon(icon,
+                color: selected ? AppColors.accent : AppColors.muted),
+            title: Text(label,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppColors.text,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                )),
+            trailing: selected
+                ? Icon(Icons.check, color: AppColors.accent, size: 20)
+                : null,
+            onTap: () => Navigator.of(context).pop(preset),
+          );
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+                  child: Text('Filter by scan date',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.text,
+                      )),
+                ),
+                option(_DatePreset.any, 'Any date', Icons.all_inclusive),
+                option(_DatePreset.today, 'Today', Icons.today_outlined),
+                option(_DatePreset.last7, 'Last 7 days', Icons.date_range),
+                option(_DatePreset.last30, 'Last 30 days', Icons.date_range),
+                option(_DatePreset.thisYear, 'This year (${now.year})',
+                    Icons.calendar_today_outlined),
+                option(_DatePreset.lastYear, 'Last year (${now.year - 1})',
+                    Icons.history),
+                option(_DatePreset.custom, 'Custom range…',
+                    Icons.edit_calendar_outlined),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (choice == null || !mounted) return;
+    if (choice != _DatePreset.custom) {
+      _setDatePreset(choice);
+      return;
     }
-    list = list.where((d) {
-      final record = ScanStore.load(d);
-      return record?.kind == _kindFilterValue;
+
+    final earliest = _all.isEmpty
+        ? DateTime(now.year - 1)
+        : _all.map((e) => e.date).reduce((a, b) => a.isBefore(b) ? a : b);
+    final first = DateTime(math.min(earliest.year, now.year - 1));
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: first,
+      lastDate: now,
+      initialDateRange: _datePreset == _DatePreset.custom
+          ? DateTimeRange(
+              start: _dateStart!,
+              end: _dateEnd!.subtract(const Duration(days: 1)))
+          : null,
+      helpText: 'Show scans between',
+    );
+    if (range == null || !mounted) return;
+    _setDatePreset(_DatePreset.custom, custom: range);
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _kindFilter = null;
+      _complianceFilter = '';
+      _datePreset = _DatePreset.any;
+      _dateStart = null;
+      _dateEnd = null;
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    _applySort();
+  }
+
+  final TextEditingController _searchController = TextEditingController();
+
+  void _applySort({bool resetPage = true}) {
+    final query = _searchQuery.toLowerCase();
+    final list = _all.where((e) {
+      if (query.isNotEmpty && !e.name.toLowerCase().contains(query)) {
+        return false;
+      }
+      if (_kindFilter != null && e.record?.kind != _kindFilter) return false;
+      if (_complianceFilter.isNotEmpty &&
+          e.record?.statusLabel != _complianceFilter) {
+        return false;
+      }
+      if (_dateStart != null && e.date.isBefore(_dateStart!)) return false;
+      if (_dateEnd != null && !e.date.isBefore(_dateEnd!)) return false;
+      return true;
     }).toList();
-    if (_complianceFilter.isNotEmpty) {
-      list = list.where((d) {
-        final record = ScanStore.load(d);
-        return record?.statusLabel == _complianceFilter;
-      }).toList();
-    }
+
     if (_sortBy == 'Name') {
       list.sort((a, b) => _nameAscending
-          ? p.basename(a.path).compareTo(p.basename(b.path))
-          : p.basename(b.path).compareTo(p.basename(a.path)));
-    } else if (_sortBy == 'Date') {
-      list.sort((a, b) {
-        final aDate = ScanStore.load(a)?.scannedAt ?? a.statSync().modified;
-        final bDate = ScanStore.load(b)?.scannedAt ?? b.statSync().modified;
-        return _dateNewest ? bDate.compareTo(aDate) : aDate.compareTo(bDate);
-      });
+          ? a.name.compareTo(b.name)
+          : b.name.compareTo(a.name));
+    } else {
+      list.sort((a, b) =>
+          _dateNewest ? b.date.compareTo(a.date) : a.date.compareTo(b.date));
     }
-    setState(() => _filtered = list);
+
+    setState(() {
+      _filtered = list;
+      final lastPage = math.max(0, (list.length - 1) ~/ _pageSize);
+      _page = resetPage ? 0 : math.min(_page, lastPage);
+      // Drop selections that are no longer visible under the new filters,
+      // so Delete never acts on records the user can't see.
+      final visible = list.map((e) => e.dir.path).toSet();
+      _selected.removeWhere((path) => !visible.contains(path));
+      _isSelecting = _selected.isNotEmpty;
+    });
+    if (resetPage && _scroll.hasClients) _scroll.jumpTo(0);
   }
 
   void _onSearchChanged(String val) {
-    _searchQuery = val;
+    _searchQuery = val.trim();
     _applySort();
   }
+
+  // ── Pagination ───────────────────────────────────────────────────────────
+
+  int get _pageCount =>
+      _filtered.isEmpty ? 1 : ((_filtered.length - 1) ~/ _pageSize) + 1;
+
+  List<_Entry> get _pageEntries {
+    final start = _page * _pageSize;
+    if (start >= _filtered.length) return const [];
+    return _filtered.sublist(
+        start, math.min(start + _pageSize, _filtered.length));
+  }
+
+  void _goToPage(int page) {
+    final target = page.clamp(0, _pageCount - 1);
+    if (target == _page) return;
+    setState(() => _page = target);
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  // ── Selection / delete ───────────────────────────────────────────────────
 
   void _toggleSelect(String path) {
     setState(() {
@@ -141,7 +405,7 @@ class RecordsScreenState extends State<RecordsScreen> {
 
   void _selectAll() {
     setState(() {
-      _selected.addAll(_filtered.map((d) => d.path));
+      _selected.addAll(_filtered.map((e) => e.dir.path));
       _isSelecting = _selected.isNotEmpty;
     });
   }
@@ -319,19 +583,61 @@ class RecordsScreenState extends State<RecordsScreen> {
     );
   }
 
+  /// Exports exactly what the list shows: the records under the active
+  /// filters and search, in the on-screen order. The PDF's metrics, tables
+  /// and photos are all built from this one list, and its header states the
+  /// filter so a reader knows it is a subset.
   Future<void> _generateReport() async {
+    final entries = List<_Entry>.of(_filtered);
+    if (entries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('No records match the current filters to export.')),
+      );
+      return;
+    }
+
+    final summary = _filterSummary;
+    final count = entries.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Export PDF report'),
+        content: Text(
+          '$count record${count == 1 ? '' : 's'} will be included'
+          '${summary.isEmpty ? ' (all records).' : ', matching:\n$summary'}'
+          '\n\nOnly these records, their photos and their totals appear in '
+          'the report.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Export'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
 
     showDialog(
       context: context,
       barrierDismissible: false,
-
       builder: (_) => Center(
         child: CircularProgressIndicator(color: AppColors.accentLight),
       ),
     );
 
     try {
-      final pw.Document pdf = await ReportBuilder.build();
+      final pw.Document pdf = await ReportBuilder.buildFromDirs(
+        entries.map((e) => e.dir).toList(),
+        filterSummary: summary,
+        periodStart: _dateStart,
+        periodEnd: _dateEnd?.subtract(const Duration(days: 1)),
+      );
       if (!mounted) return;
       Navigator.of(context).pop();
 
@@ -351,8 +657,38 @@ class RecordsScreenState extends State<RecordsScreen> {
     }
   }
 
+  Widget _rowLabel(String text) => Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: SizedBox(
+          width: 48,
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.text)),
+        ),
+      );
+
+  Widget _statusChip(String label, String value, Color color) => Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: _SortChip(
+          label: label,
+          selected: _complianceFilter == value,
+          color: color,
+          onTap: () {
+            setState(() =>
+                _complianceFilter = _complianceFilter == value ? '' : value);
+            _applySort();
+          },
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
+    final pageEntries = _pageEntries;
+    final firstShown = _page * _pageSize + 1;
+    final lastShown = _page * _pageSize + pageEntries.length;
+
     return Scaffold(
       appBar: AppBar(
 
@@ -378,28 +714,31 @@ class RecordsScreenState extends State<RecordsScreen> {
 
           Padding(
             padding: const EdgeInsets.only(right: 10, top: 8, bottom: 8),
-            child: Material(
-              color: AppColors.accent,
-              borderRadius: BorderRadius.circular(10),
-              child: InkWell(
-                onTap: _generateReport,
+            child: Tooltip(
+              message: 'Export the records shown to PDF',
+              child: Material(
+                color: AppColors.accent,
                 borderRadius: BorderRadius.circular(10),
-                child: const Padding(
-                  padding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.picture_as_pdf_outlined,
-                          color: Colors.white, size: 16),
-                      SizedBox(width: 6),
-                      Text('PDF',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          )),
-                    ],
+                child: InkWell(
+                  onTap: _generateReport,
+                  borderRadius: BorderRadius.circular(10),
+                  child: const Padding(
+                    padding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.picture_as_pdf_outlined,
+                            color: Colors.white, size: 16),
+                        SizedBox(width: 6),
+                        Text('PDF',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            )),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -412,91 +751,94 @@ class RecordsScreenState extends State<RecordsScreen> {
         children: [
 
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const Text('Sort :',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                    const SizedBox(width: 8),
-                    _SortChip(
-                        label: _sortBy == 'Name'
-                            ? (_nameAscending ? 'Name A→Z' : 'Name Z→A')
-                            : 'Name A→Z',
-                        selected: _sortBy == 'Name',
-                        onTap: () {
-                          if (_sortBy == 'Name') {
-                            setState(() => _nameAscending = !_nameAscending);
-                          } else {
-                            setState(() { _sortBy = 'Name'; _nameAscending = true; });
-                          }
-                          _applySort();
-                        }),
-                    const SizedBox(width: 6),
-                    _SortChip(
-                        label: _sortBy == 'Date'
-                            ? (_dateNewest ? 'Date Latest' : 'Date Oldest')
-                            : 'Date Latest',
-                        selected: _sortBy == 'Date',
-                        onTap: () {
-                          if (_sortBy == 'Date') {
-                            setState(() => _dateNewest = !_dateNewest);
-                          } else {
-                            setState(() { _sortBy = 'Date'; _dateNewest = true; });
-                          }
-                          _applySort();
-                        }),
-                    const SizedBox(width: 6),
-
-                    _CycleFilterChip(
-                      label: _kindFilterLabel,
-                      color: _kindFilterColor,
-                      onTap: _cycleKindFilter,
-                    ),
-                  ],
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _rowLabel('Sort'),
+                      _SortChip(
+                          label: _sortBy == 'Date'
+                              ? (_dateNewest ? 'Date Latest' : 'Date Oldest')
+                              : 'Date Latest',
+                          selected: _sortBy == 'Date',
+                          onTap: () {
+                            if (_sortBy == 'Date') {
+                              setState(() => _dateNewest = !_dateNewest);
+                            } else {
+                              setState(() { _sortBy = 'Date'; _dateNewest = true; });
+                            }
+                            _applySort();
+                          }),
+                      const SizedBox(width: 6),
+                      _SortChip(
+                          label: _sortBy == 'Name'
+                              ? (_nameAscending ? 'Name A→Z' : 'Name Z→A')
+                              : 'Name A→Z',
+                          selected: _sortBy == 'Name',
+                          onTap: () {
+                            if (_sortBy == 'Name') {
+                              setState(() => _nameAscending = !_nameAscending);
+                            } else {
+                              setState(() { _sortBy = 'Name'; _nameAscending = true; });
+                            }
+                            _applySort();
+                          }),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 6),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      const Text('Filter :',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                      const SizedBox(width: 8),
-                      _SortChip(
-                          label: 'Compliant',
-                          selected: _complianceFilter == 'COMPLIANT',
-                          color: const Color(0xFF4CAF50),
-                          onTap: () {
-                            setState(() => _complianceFilter =
-                            _complianceFilter == 'COMPLIANT' ? '' : 'COMPLIANT');
-                            _applySort();
-                          }),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                          label: 'Non-Compliant',
-                          selected: _complianceFilter == 'NON-COMPLIANT',
-                          color: const Color(0xFFFF9800),
-                          onTap: () {
-                            setState(() => _complianceFilter =
-                            _complianceFilter == 'NON-COMPLIANT' ? '' : 'NON-COMPLIANT');
-                            _applySort();
-                          }),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                          label: 'Warning',
-                          selected:
-                              _complianceFilter == ScanRecord.warningLabel,
-                          color: const Color(0xFFF44336),
-                          onTap: () {
-                            setState(() => _complianceFilter =
-                            _complianceFilter == ScanRecord.warningLabel
-                                ? ''
-                                : ScanRecord.warningLabel);
-                            _applySort();
-                          }),
+                      _rowLabel('Type'),
+                      for (final kind in <ScanKind?>[
+                        null,
+                        ScanKind.label,
+                        ScanKind.damage,
+                        ScanKind.both,
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: _SortChip(
+                            label: _kindName(kind),
+                            selected: _kindFilter == kind,
+                            color: _kindColor(kind),
+                            onTap: () {
+                              setState(() => _kindFilter = kind);
+                              _applySort();
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _rowLabel('Filter'),
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: _SortChip(
+                          label: _dateLabel,
+                          icon: Icons.calendar_month_outlined,
+                          trailingIcon: Icons.arrow_drop_down,
+                          selected: _datePreset != _DatePreset.any,
+                          onTap: _pickDateFilter,
+                        ),
+                      ),
+                      _statusChip('Compliant', 'COMPLIANT',
+                          const Color(0xFF4CAF50)),
+                      _statusChip('Non-Compliant', 'NON-COMPLIANT',
+                          const Color(0xFFFF9800)),
+                      _statusChip('Warning', ScanRecord.warningLabel,
+                          const Color(0xFFF44336)),
                     ],
                   ),
                 ),
@@ -508,6 +850,7 @@ class RecordsScreenState extends State<RecordsScreen> {
             padding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: TextField(
+              controller: _searchController,
               onChanged: _onSearchChanged,
 
               style: TextStyle(fontSize: 13, color: AppColors.text),
@@ -537,7 +880,34 @@ class RecordsScreenState extends State<RecordsScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 4),
+
+          if (!_loading && _all.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 12, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _hasActiveFilters
+                          ? '${_filtered.length} of ${_all.length} records match'
+                          : '${_all.length} record${_all.length == 1 ? '' : 's'}',
+                      style: TextStyle(fontSize: 12, color: AppColors.muted),
+                    ),
+                  ),
+                  if (_hasActiveFilters)
+                    TextButton(
+                      onPressed: _clearFilters,
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      child: Text('Clear filters',
+                          style: TextStyle(
+                              fontSize: 12, color: AppColors.accent)),
+                    ),
+                ],
+              ),
+            ),
 
           Expanded(
             child: _loading
@@ -547,10 +917,15 @@ class RecordsScreenState extends State<RecordsScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.folder_open,
-                      size: 64, color: AppColors.muted),
+                  Icon(
+                      _all.isEmpty ? Icons.folder_open : Icons.filter_alt_off,
+                      size: 64,
+                      color: AppColors.muted),
                   const SizedBox(height: 12),
-                  Text('No records yet',
+                  Text(
+                      _all.isEmpty
+                          ? 'No records yet'
+                          : 'No records match these filters',
                       style: TextStyle(
                           fontSize: 16,
                           color: AppColors.muted)),
@@ -560,21 +935,21 @@ class RecordsScreenState extends State<RecordsScreen> {
                 : RefreshIndicator(
               onRefresh: loadFiles,
               child: ListView.builder(
+                controller: _scroll,
                 padding: const EdgeInsets.symmetric(
                     horizontal: 12, vertical: 8),
-                itemCount: _filtered.length,
+                itemCount: pageEntries.length,
                 itemBuilder: (context, index) {
-                  final dir = _filtered[index];
-                  final name = p.basename(dir.path);
-                  final record = ScanStore.load(dir);
-                  final date = record?.scannedAt ?? dir.statSync().modified;
+                  final entry = pageEntries[index];
+                  final dir = entry.dir;
                   final isSelected =
                   _selected.contains(dir.path);
 
                   return _RecordCard(
                     dir: dir,
-                    name: name,
-                    date: date,
+                    name: entry.name,
+                    date: entry.date,
+                    record: entry.record,
                     isSelected: isSelected,
                     isSelecting: _isSelecting,
                     onTap: () {
@@ -596,6 +971,16 @@ class RecordsScreenState extends State<RecordsScreen> {
               ),
             ),
           ),
+
+          if (!_loading && _filtered.length > _pageSize)
+            _PaginationBar(
+              page: _page,
+              pageCount: _pageCount,
+              firstShown: firstShown,
+              lastShown: lastShown,
+              total: _filtered.length,
+              onPage: _goToPage,
+            ),
 
           AnimatedSize(
             duration: const Duration(milliseconds: 240),
@@ -642,8 +1027,8 @@ class RecordsScreenState extends State<RecordsScreen> {
                       ElevatedButton.icon(
                         onPressed: _confirmMultiDelete,
                         icon: const Icon(Icons.close, color: Colors.white),
-                        label: const Text('Delete All',
-                            style: TextStyle(color: Colors.white)),
+                        label: Text('Delete (${_selected.length})',
+                            style: const TextStyle(color: Colors.white)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.warningText,
                           shape: RoundedRectangleBorder(
@@ -662,22 +1047,93 @@ class RecordsScreenState extends State<RecordsScreen> {
   }
 }
 
+/// Page controls under the records list: first / previous / "21–40 of
+/// 1,012 · Page 2 of 51" / next / last.
+class _PaginationBar extends StatelessWidget {
+  final int page;
+  final int pageCount;
+  final int firstShown;
+  final int lastShown;
+  final int total;
+  final ValueChanged<int> onPage;
+
+  const _PaginationBar({
+    required this.page,
+    required this.pageCount,
+    required this.firstShown,
+    required this.lastShown,
+    required this.total,
+    required this.onPage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final atStart = page == 0;
+    final atEnd = page >= pageCount - 1;
+
+    Widget button(IconData icon, String tooltip, bool enabled, int target) =>
+        IconButton(
+          onPressed: enabled ? () => onPage(target) : null,
+          icon: Icon(icon),
+          tooltip: tooltip,
+          color: AppColors.accent,
+          disabledColor: AppColors.border,
+          visualDensity: VisualDensity.compact,
+        );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.border, width: 0.6)),
+      ),
+      child: Row(
+        children: [
+          button(Icons.first_page, 'First page', !atStart, 0),
+          button(Icons.chevron_left, 'Previous page', !atStart, page - 1),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Page ${page + 1} of $pageCount',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.text)),
+                Text('$firstShown–$lastShown of $total',
+                    style: TextStyle(fontSize: 11, color: AppColors.muted)),
+              ],
+            ),
+          ),
+          button(Icons.chevron_right, 'Next page', !atEnd, page + 1),
+          button(Icons.last_page, 'Last page', !atEnd, pageCount - 1),
+        ],
+      ),
+    );
+  }
+}
+
 class _SortChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final Color? color;
+  final IconData? icon;
+  final IconData? trailingIcon;
 
   const _SortChip({
     required this.label,
     required this.selected,
     required this.onTap,
     this.color,
+    this.icon,
+    this.trailingIcon,
   });
 
   @override
   Widget build(BuildContext context) {
     final activeColor = color ?? AppColors.accentLight;
+    final fg = selected ? Colors.white : AppColors.muted;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -689,54 +1145,22 @@ class _SortChip extends StatelessWidget {
             color: selected ? activeColor : AppColors.border,
           ),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : AppColors.muted,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CycleFilterChip extends StatelessWidget {
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _CycleFilterChip({
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color),
-        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.sync, size: 12, color: Colors.white),
-            const SizedBox(width: 4),
+            if (icon != null) ...[
+              Icon(icon, size: 13, color: fg),
+              const SizedBox(width: 4),
+            ],
             Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: Colors.white,
+                color: fg,
               ),
             ),
+            if (trailingIcon != null) Icon(trailingIcon, size: 16, color: fg),
           ],
         ),
       ),
@@ -748,6 +1172,7 @@ class _RecordCard extends StatelessWidget {
   final Directory dir;
   final String name;
   final DateTime date;
+  final ScanRecord? record;
   final bool isSelected;
   final bool isSelecting;
   final VoidCallback onTap;
@@ -758,6 +1183,7 @@ class _RecordCard extends StatelessWidget {
     required this.dir,
     required this.name,
     required this.date,
+    required this.record,
     required this.isSelected,
     required this.isSelecting,
     required this.onTap,
@@ -813,7 +1239,6 @@ class _RecordCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final record = ScanStore.load(dir);
     final status = record?.statusLabel ?? '—';
     final keyword = record?.matchedKeyword ?? '—';
     final packagingType = record?.packagingType;

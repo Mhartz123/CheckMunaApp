@@ -203,6 +203,16 @@ void main() {
   });
 
   group('PackagingType', () {
+    test('foil is photographed front and back only', () {
+      expect(PackagingType.foil.captureSlots, [BoxSlot.front, BoxSlot.back]);
+    });
+
+    test('box and bottle are photographed from all four sides', () {
+      for (final type in [PackagingType.box, PackagingType.bottle]) {
+        expect(type.captureSlots, BoxSlot.values, reason: type.name);
+      }
+    });
+
     test('every packaging type has a model', () {
       expect(PackagingType.box.hasModel, isTrue);
       expect(PackagingType.foil.hasModel, isTrue);

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:onnxruntime/onnxruntime.dart';
 
+import '../models/damage_report.dart';
 import '../models/scan_record.dart';
 import '../models/scan_timings.dart';
 
@@ -103,7 +104,8 @@ class DamageModelException implements Exception {
 /// (~3 MB) with the detection head kept in float32 — see
 /// `scripts/repair_yolo_int8_head.py` for why the head must stay float.
 ///
-/// Pipeline per photo: decode → letterbox to [inputSize] → CHW float32 (÷255)
+/// Pipeline per photo: decode → resize → optional CLAHE ([claheEqualize],
+/// on for [box] only) → letterbox-pad to [inputSize] → CHW float32 (÷255)
 /// → model → decode the [1, 4+nc, anchors] output → confidence filter →
 /// class-aware NMS. Any surviving detection counts as damage, except classes
 /// listed in [nonDamageClasses]; raw class names are preserved for display and
@@ -113,47 +115,77 @@ class DamageModelException implements Exception {
 /// [DamageCheckResult.available] rather than thrown, so a scan still completes
 /// with damage marked unavailable.
 class DamageDetectionService {
-  /// Cardboard boxes: YOLO11n at 416 px (`results/boxes.onnx`, repaired).
+  /// Cardboard boxes: tuned YOLO11n at 640 px
+  /// (`results/New results/boxes_yolo11n_tuned_640_int8.onnx`, repaired).
   ///
-  /// 0.35 measured over real photos: fires on 42 of 60 damaged boxes and 4 of
-  /// 60 clean ones. Test-set F1 0.53 / mAP50 0.51 (`results/Boxes`).
+  /// Tuned config `batch_batch8` on boxes-v4 v1
+  /// (`checkmuna_tuning_boxes_yolo11n_640px_20260919_0830`): validation
+  /// P 0.77, R 0.70, F1 0.73, mAP50 0.78, mAP50-95 0.37 — up from the 0.68
+  /// mAP50 baseline. 3.03 MB INT8, ~205 ms mean on a Colab CPU proxy. No
+  /// confidence sweep has been run on this model yet, so 0.25 is
+  /// Ultralytics' default predict threshold — revisit once a sweep exists.
+  ///
+  /// The only detector with [claheEqualize] on: box damage is largely
+  /// low-contrast geometry (creased corners, dented faces, lifted label
+  /// edges) whose evidence is a shading gradient rather than a colour or
+  /// texture change, and that gradient is what a warehouse's flat overhead
+  /// light flattens out. See [applyClahe].
   static final DamageDetectionService box = DamageDetectionService(
-    modelAsset: 'assets/box_damage_yolo11n_int8.onnx',
-    inputSize: 416,
-    // names = {0: 'Label_aberration', 1: 'Structural_Deformation'}
-    classNames: const {0: 'Label aberration', 1: 'Structural deformation'},
-    confThreshold: 0.35,
+    modelAsset: 'assets/box_damage_yolo11n_640_int8.onnx',
+    inputSize: 640,
+    // names = {0: 'label_abberation', 1: 'surface_deformation'}
+    classNames: const {0: 'Label aberration', 1: 'Surface deformation'},
+    confThreshold: 0.25,
     subject: 'box',
+    claheEqualize: true,
   );
 
-  /// Bottles: YOLOv8n at 416 px (`results/bottles.onnx`, repaired).
+  /// Bottles: tuned YOLOv8n at 640 px
+  /// (`results/New results/bottles_yolov8n_tuned_640_int8.onnx`, repaired).
   ///
-  /// 0.35 is the F1 optimum of the bottle confidence sweep
-  /// (`results/Bottles/confidence_sweep.csv`: P 0.71, R 0.54, F1 0.61).
+  /// Tuned config `optimiser_adamw_lr0.0005` on bote-kcrbr v6
+  /// (`checkmuna_tuning_bottles_yolov8n_640px_20260920_0548`): validation
+  /// P 0.79, R 0.61, F1 0.69, mAP50 0.65, mAP50-95 0.32 — up from the 0.55
+  /// mAP50 baseline. 3.29 MB INT8, ~220 ms mean on a Colab CPU proxy. No
+  /// confidence sweep has been run on this model yet, so 0.25 is
+  /// Ultralytics' default predict threshold — revisit once a sweep exists.
+  ///
+  /// This retrain drops the input from 960 px to 640 px, which is where the
+  /// bottle detector stops being the slow one: the old export cost ~410 ms
+  /// mean, and at 640 px the three detectors are now within ~20 ms of each
+  /// other.
   static final DamageDetectionService bottle = DamageDetectionService(
-    modelAsset: 'assets/bottle_damage_yolov8n_int8.onnx',
-    inputSize: 416,
+    modelAsset: 'assets/bottle_damage_yolov8n_640_int8.onnx',
+    inputSize: 640,
     // names = {0: 'label_abberation'}
     classNames: const {0: 'Label aberration'},
-    confThreshold: 0.35,
+    confThreshold: 0.25,
     subject: 'bottle',
   );
 
-  /// Foil packaging (sachets, blister packs): YOLOv5nu at 416 px
-  /// (`results/Foils/model/yolov5nu_416_int8.onnx`, repaired).
+  /// Foil packaging (sachets, blister packs): tuned YOLOv5nu at 640 px
+  /// (`results/New results/foils_yolov5nu_tuned_640_int8.onnx`, repaired).
   ///
-  /// 0.25 from the foil confidence sweep (`results/Foils/csv/confidence_sweep.csv`:
-  /// P 0.71, R 0.82, F1 0.76) — within 0.003 F1 of the lowest thresholds but
-  /// with better precision.
+  /// Tuned config `batch_batch8` on foils_without_nodamage v3
+  /// (`checkmuna_tuning_foils_yolov5nu_640px_20260920_0605`): validation
+  /// P 0.88, R 0.77, F1 0.82, mAP50 0.79, mAP50-95 0.56 — up from the 0.71
+  /// mAP50 baseline, and the strongest of the three detectors. 2.84 MB INT8,
+  /// ~224 ms mean on a Colab CPU proxy.
   ///
-  /// Class 0 is an explicit "No-Damage" class, so its boxes are skipped
-  /// rather than reported as damage.
+  /// The old foil export's confidence sweep does not carry over (different
+  /// dataset, different class set), so this is back on Ultralytics' 0.25
+  /// default until a sweep is re-run.
+  ///
+  /// The dataset this was trained on drops the old explicit "No-Damage"
+  /// class — hence `foils_without_nodamage` — so there is no
+  /// [nonDamageClasses] entry any more and class 0 is now the damage class.
+  /// Keeping the old `{0}` here would have suppressed every foil detection
+  /// the model can make.
   static final DamageDetectionService foil = DamageDetectionService(
-    modelAsset: 'assets/foil_damage_yolov5nu_int8.onnx',
-    inputSize: 416,
-    // names = {0: 'No-Damage', 1: 'Structural_Deformation'}
-    classNames: const {0: 'No damage', 1: 'Structural deformation'},
-    nonDamageClasses: const {0},
+    modelAsset: 'assets/foil_damage_yolov5nu_640_int8.onnx',
+    inputSize: 640,
+    // names = {0: 'Structural_Deformation'}
+    classNames: const {0: 'Structural deformation'},
     confThreshold: 0.25,
     subject: 'foil',
   );
@@ -165,6 +197,7 @@ class DamageDetectionService {
     required this.confThreshold,
     required this.subject,
     this.nonDamageClasses = const {},
+    this.claheEqualize = false,
   });
 
   final String modelAsset;
@@ -187,8 +220,33 @@ class DamageDetectionService {
   /// What the photos show, for log lines ("box", "bottle").
   final String subject;
 
+  /// Run CLAHE over the photo's luminance before it reaches the model.
+  ///
+  /// Off by default and on only for [box] — this is a per-detector decision,
+  /// not a global one. Contrast-limited equalisation is not free: it lifts
+  /// local detail but also amplifies sensor noise in flat regions, and it
+  /// moves the input away from the plain-resize pipeline the models were
+  /// trained and validated under. That trade is worth taking where the
+  /// damage signal *is* local contrast (box creases and dents) and not where
+  /// the signal is already high-contrast (foil tears against specular film),
+  /// where it would mostly add noise.
+  ///
+  /// See [applyClahe] for the implementation and its parameters.
+  final bool claheEqualize;
+
   /// IoU above which two same-class boxes are treated as duplicates in NMS.
   static const double _iouThreshold = 0.45;
+
+  /// CLAHE grid: 8x8 tiles, OpenCV's `createCLAHE` default. At a 640 px
+  /// input that is 80 px per tile — small enough to track lighting across a
+  /// box face, large enough that one crease does not become the whole
+  /// histogram it is equalised against.
+  static const int _claheTiles = 8;
+
+  /// CLAHE clip limit, as a multiple of the mean bin count (OpenCV's
+  /// `clipLimit` default of 2.0 under the same convention). Higher lifts
+  /// more detail out of shadow and amplifies more noise with it.
+  static const double _claheClipLimit = 2.0;
 
   Future<OrtSession>? _sessionLoad;
 
@@ -261,8 +319,8 @@ class DamageDetectionService {
   /// So: push a synthetic frame through and require at least one non-zero
   /// class score. A flat gray frame is not enough — a healthy model can score
   /// every anchor below the first quantization bucket (~0.002) on it — so try
-  /// a colour gradient, then fixed-seed noise. Both repaired 416 px models
-  /// score well above zero on at least one; a dead head scores exactly 0 on
+  /// a colour gradient, then fixed-seed noise. Every repaired model
+  /// scores well above zero on at least one; a dead head scores exactly 0 on
   /// everything, so an all-zero result is conclusive.
   void _assertHeadAlive(OrtSession session) {
     for (final probe in [_gradientProbe(), _noiseProbe()]) {
@@ -354,7 +412,13 @@ class DamageDetectionService {
     }
   }
 
-  Future<DamageCheckResult> check(List<String> photoPaths) async {
+  /// [photoLabels], when given, names each photo's capture slot ("Front",
+  /// "Side") for the per-photo report; anything missing falls back to
+  /// "Photo N".
+  Future<DamageCheckResult> check(
+    List<String> photoPaths, {
+    List<String>? photoLabels,
+  }) async {
     if (photoPaths.isEmpty) {
       return const DamageCheckResult(
         available: false,
@@ -377,6 +441,7 @@ class DamageDetectionService {
 
     final allDetections = <String>[];
     final allBoxes = <DamageDetection>[];
+    final photoReports = <DamagePhotoReport>[];
     var anyDamaged = false;
     var anySucceeded = false;
     var maxConfidence = 0.0;
@@ -402,6 +467,14 @@ class DamageDetectionService {
             ' (max ${(result.maxConfidence * 100).toStringAsFixed(0)}%)'
             ' in ${result.preprocessMs.round()} ms prep'
             ' + ${result.inferenceMs.round()} ms inference');
+        photoReports.add(DamagePhotoReport(
+          index: i,
+          label: _photoLabel(photoLabels, i),
+          preprocessMs: result.preprocessMs,
+          inferenceMs: result.inferenceMs,
+          succeeded: true,
+          detections: result.boxes,
+        ));
         if (result.isDamaged) {
           anyDamaged = true;
           allDetections.addAll(result.detections);
@@ -412,16 +485,35 @@ class DamageDetectionService {
         }
       } catch (e) {
         debugPrint('Damage check failed for $path: $e');
+        // Recorded rather than skipped: a photo that failed is not a photo
+        // that came back clean, and the report has to be able to say so.
+        photoReports.add(DamagePhotoReport(
+          index: i,
+          label: _photoLabel(photoLabels, i),
+          preprocessMs: 0,
+          inferenceMs: 0,
+          succeeded: false,
+        ));
       }
     }
     debugPrint('Damage: scanned ${photoPaths.length} $subject photo(s); '
         'damaged=$anyDamaged; classes=${allDetections.toSet()}');
+
+    final report = DamageSessionReport(
+      subject: subject,
+      modelAsset: modelAsset,
+      inputSize: inputSize,
+      confThreshold: confThreshold,
+      modelLoadMs: loadMs,
+      photos: photoReports,
+    );
 
     if (!anySucceeded) {
       return DamageCheckResult(
         available: false,
         message: 'Damage check unavailable (inference failed).',
         timings: timings.build(),
+        report: report,
       );
     }
 
@@ -437,7 +529,16 @@ class DamageDetectionService {
       boxes: allBoxes,
       maxConfidence: maxConfidence,
       timings: timings.build(),
+      report: report,
     );
+  }
+
+  static String _photoLabel(List<String>? labels, int index) {
+    if (labels != null && index < labels.length) {
+      final label = labels[index].trim();
+      if (label.isNotEmpty) return label;
+    }
+    return 'Photo ${index + 1}';
   }
 
   /// Decodes and letterboxes one photo. Runs on a background isolate.
@@ -447,8 +548,8 @@ class DamageDetectionService {
   /// every input pixel on top of that. On the UI isolate — where this used to
   /// live — that is a hard freeze for the whole scan, which is exactly what
   /// made damage checks look like the app had hung.
-  static _Preprocessed _preprocessWorker((String, int) request) {
-    final (path, inputSize) = request;
+  static _Preprocessed _preprocessWorker((String, int, bool) request) {
+    final (path, inputSize, clahe) = request;
     final bytes = File(path).readAsBytesSync();
     final decoded = img.decodeImage(bytes);
     if (decoded == null) {
@@ -462,6 +563,12 @@ class DamageDetectionService {
     final newW = (oriented.width * scale).round();
     final newH = (oriented.height * scale).round();
     final resized = img.copyResize(oriented, width: newW, height: newH);
+
+    // Equalised after the resize and before the composite, deliberately: at
+    // model scale this is ~0.4 MP rather than the full multi-megapixel still,
+    // and running it on the padded canvas would feed the flat gray border
+    // into the tile histograms and skew the mapping near the edges.
+    if (clahe) applyClahe(resized);
 
     final canvas = img.Image(width: inputSize, height: inputSize);
     img.fill(canvas, color: img.ColorRgb8(114, 114, 114));
@@ -492,6 +599,152 @@ class DamageDetectionService {
     );
   }
 
+  /// Contrast Limited Adaptive Histogram Equalisation, in place.
+  ///
+  /// Plain histogram equalisation works on the whole frame at once, so a
+  /// photo that is bright on one side and shadowed on the other gets a single
+  /// compromise curve that helps neither. CLAHE instead equalises each tile
+  /// of an 8x8 grid against its own histogram, so a dent sitting in shadow is
+  /// stretched against the shadow rather than against the whole photo. Two
+  /// corrections keep that from turning into artefacts:
+  ///
+  ///  * **Clipping.** A tile of flat cardboard has a histogram concentrated
+  ///    in a few bins, and equalising it would stretch sensor noise across
+  ///    the full range. Each bin is capped at [_claheClipLimit] times the
+  ///    mean bin count and the clipped excess is redistributed evenly, which
+  ///    bounds how steep the mapping can get.
+  ///  * **Bilinear interpolation.** Applying each tile's own mapping to its
+  ///    own pixels leaves visible seams at the tile borders — which a
+  ///    detector reads as edges. Every pixel is instead mapped by blending
+  ///    the four nearest tile mappings by distance to their centres.
+  ///
+  /// Only luminance is equalised; R/G/B are then scaled by the same ratio so
+  /// hue survives. Working on luma rather than per channel is what keeps the
+  /// equalisation from shifting colours, which matters because "label
+  /// aberration" is partly a colour judgement.
+  ///
+  /// Public only so `test/clahe_test.dart` can exercise the real thing; the
+  /// preprocess worker is the only caller in the app.
+  @visibleForTesting
+  static void applyClahe(img.Image image) {
+    const tiles = _claheTiles;
+    final w = image.width, h = image.height;
+    if (w < tiles || h < tiles) return; // too small to tile meaningfully
+
+    // ── Luma plane (BT.601), so each pixel is read once, not once per tile ──
+    final luma = Uint8List(w * h);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final p = image.getPixel(x, y);
+        luma[y * w + x] = _clamp255(0.299 * p.r + 0.587 * p.g + 0.114 * p.b);
+      }
+    }
+
+    // Tile bounds come from integer division of the full extent, so the tiles
+    // tile the image exactly even when the dimensions do not divide evenly.
+    int tileStart(int i, int extent) => (i * extent) ~/ tiles;
+
+    // ── Per-tile mapping: clipped histogram → redistributed → CDF → LUT ──
+    final luts = List.generate(tiles * tiles, (_) => Uint8List(256));
+    final hist = Int32List(256);
+    for (var ty = 0; ty < tiles; ty++) {
+      final y0 = tileStart(ty, h), y1 = tileStart(ty + 1, h);
+      for (var tx = 0; tx < tiles; tx++) {
+        final x0 = tileStart(tx, w), x1 = tileStart(tx + 1, w);
+        final count = (y1 - y0) * (x1 - x0);
+        if (count <= 0) continue;
+
+        hist.fillRange(0, 256, 0);
+        for (var y = y0; y < y1; y++) {
+          final row = y * w;
+          for (var x = x0; x < x1; x++) {
+            hist[luma[row + x]]++;
+          }
+        }
+
+        // Clip, then hand every clipped pixel back: an even share to each
+        // bin, and the remainder one apiece across the low bins. All of it
+        // has to go back, because the CDF below is normalised by [count] and
+        // any pixel dropped here is range the mapping never reaches. On a
+        // low-contrast tile the excess is most of the tile, so dropping even
+        // the sub-256 remainder visibly crushes the output.
+        final limit = math.max(1, (_claheClipLimit * count / 256).round());
+        var excess = 0;
+        for (var i = 0; i < 256; i++) {
+          if (hist[i] > limit) {
+            excess += hist[i] - limit;
+            hist[i] = limit;
+          }
+        }
+        final share = excess ~/ 256;
+        final remainder = excess % 256;
+        for (var i = 0; i < 256; i++) {
+          hist[i] += share + (i < remainder ? 1 : 0);
+        }
+
+        final lut = luts[ty * tiles + tx];
+        var cumulative = 0;
+        for (var i = 0; i < 256; i++) {
+          cumulative += hist[i];
+          lut[i] = _clamp255(cumulative * 255.0 / count);
+        }
+      }
+    }
+
+    // ── Apply, blending the four nearest tile LUTs ──
+    // Position is expressed in tile-centre units: -0.5 at the first centre,
+    // tiles-0.5 at the last. Clamping the indices makes the outer half-tile
+    // margins fall back to a single LUT, which is the standard CLAHE edge
+    // handling.
+    for (var y = 0; y < h; y++) {
+      final fy = (y + 0.5) * tiles / h - 0.5;
+      final ty0 = fy.floor();
+      final wy = fy - ty0;
+      final ty0c = ty0.clamp(0, tiles - 1);
+      final ty1c = (ty0 + 1).clamp(0, tiles - 1);
+      for (var x = 0; x < w; x++) {
+        final fx = (x + 0.5) * tiles / w - 0.5;
+        final tx0 = fx.floor();
+        final wx = fx - tx0;
+        final tx0c = tx0.clamp(0, tiles - 1);
+        final tx1c = (tx0 + 1).clamp(0, tiles - 1);
+
+        final src = luma[y * w + x];
+        final top = luts[ty0c * tiles + tx0c][src] * (1 - wx) +
+            luts[ty0c * tiles + tx1c][src] * wx;
+        final bottom = luts[ty1c * tiles + tx0c][src] * (1 - wx) +
+            luts[ty1c * tiles + tx1c][src] * wx;
+        final mapped = top * (1 - wy) + bottom * wy;
+
+        // Scale the channels by how far the luma moved. The +1 on both sides
+        // guards a near-black pixel, whose ratio would otherwise explode and
+        // paint shadow noise in colour.
+        var ratio = (mapped + 1) / (src + 1);
+
+        // Cap the ratio so the brightest channel lands exactly on 255 rather
+        // than past it. Letting a channel clamp on its own is what turns a
+        // saturated colour into a different colour: a dark orange being
+        // brightened clamps red first, then green, and arrives desaturated
+        // and yellow. Giving up some of the brightening on saturated pixels
+        // is the cheaper loss, because hue is itself evidence here — the
+        // box detector's other class is "label aberration".
+        final p = image.getPixel(x, y);
+        final peak = math.max(p.r, math.max(p.g, p.b)).toDouble();
+        if (peak > 0 && peak * ratio > 255) ratio = 255 / peak;
+
+        image.setPixelRgb(
+          x,
+          y,
+          _clamp255(p.r * ratio),
+          _clamp255(p.g * ratio),
+          _clamp255(p.b * ratio),
+        );
+      }
+    }
+  }
+
+  static int _clamp255(num v) => v < 0 ? 0 : (v > 255 ? 255 : v.round());
+
   /// Runs one photo through the model and returns its surviving detections.
   ///
   /// [sourceIndex] is this photo's position in the caller's list; it rides
@@ -506,7 +759,8 @@ class DamageDetectionService {
   Future<_SingleImageResult> _checkOne(
       OrtSession session, String path, int sourceIndex) async {
     final preWatch = Stopwatch()..start();
-    final pre = await compute(_preprocessWorker, (path, inputSize));
+    final pre =
+        await compute(_preprocessWorker, (path, inputSize, claheEqualize));
     // Wall-clock, so it includes spawning the isolate and copying the tensor
     // back across it — that is the wait the user actually pays, not just the
     // decode.

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import '../models/scan_record.dart';
+import 'app_prefs.dart';
 import 'scan_store.dart';
 
 /// Downscale ladder for uploaded photos: longest edge in pixels, then JPEG
@@ -74,7 +75,11 @@ String? _downscaleOne(String path) {
 /// Submits scan results to the CheckMuna central dashboard hosted on
 /// Vercel + Supabase.
 ///
-/// Every saved scan is submitted, not just flagged ones — the dashboard needs
+/// Nothing is sent unless the user has given current, explicit consent on
+/// the data-sharing notice ([AppPrefs.sharingAllowed]) — see ConsentScreen.
+/// The camera screen also lets the user withhold a single scan.
+///
+/// Every shared scan is submitted, not just flagged ones — the dashboard needs
 /// clean results too, otherwise it can't show how many boxes came back
 /// undamaged or what share of labels passed.
 ///
@@ -111,6 +116,10 @@ class ReportService {
     required ScanRecord record,
     required String productName,
   }) async {
+    // Informed consent is a hard gate: no answer, an answer to an older
+    // version of the notice, or "no" all mean nothing leaves the phone.
+    if (!AppPrefs.instance.sharingAllowed) return false;
+
     // Skip if endpoint hasn't been configured yet
     if (_endpoint.contains('YOUR_PROJECT_NAME')) {
       return false;
@@ -236,6 +245,9 @@ class ReportService {
           // from. Lets the dashboard redraw the overlay the app showed.
           'boxes': damage.boxes.map((b) => b.toJson()).toList(),
           'maxConfidence': damage.maxConfidence,
+          // Per-photo latency and confidence figures (see DamageSessionReport).
+          // Additive: a server that does not know the field ignores it.
+          if (damage.report != null) 'report': damage.report!.toJson(),
           // The photos those boxes are drawn on. Without these the dashboard
           // can say a box was dented but not show it.
           if (_includeImage) 'images': images,

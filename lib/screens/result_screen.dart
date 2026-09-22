@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
 import '../services/theme_controller.dart';
+import '../services/compliance_engine.dart';
 import '../widgets/damage_overlay.dart';
+import '../widgets/damage_report_view.dart';
 import '../widgets/timing_breakdown.dart';
 
 class ResultScreen extends StatelessWidget {
@@ -217,6 +219,15 @@ class ResultScreen extends StatelessWidget {
                     _DamageSection(
                       damage: record.damageCheck,
                       boxPhotoPaths: boxPhotoPaths,
+                    ),
+                  ],
+
+                  if (record.damageCheck.report != null) ...[
+                    const SizedBox(height: 20),
+                    DamageReportView(
+                      report: record.damageCheck.report,
+                      failThreshold:
+                          ComplianceEngine.damageConfidenceThreshold,
                     ),
                   ],
 

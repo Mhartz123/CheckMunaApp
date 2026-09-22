@@ -26,7 +26,10 @@ import 'damage_detection_service.dart';
 /// [PackagingType]. Implementations should never throw — report failures via
 /// [DamageCheckResult.available] = false instead, so a scan always completes.
 abstract class PackagingDamageDetector {
-  Future<DamageCheckResult> check(List<String> photoPaths);
+  /// [photoLabels] names each photo's capture slot for the per-photo report;
+  /// implementations that cannot use it may ignore it.
+  Future<DamageCheckResult> check(List<String> photoPaths,
+      {List<String>? photoLabels});
 
   /// Optional: kick off model loading early (see
   /// [PackagingDamageService.warmUp]). Default is a no-op for detectors with
@@ -38,8 +41,9 @@ abstract class PackagingDamageDetector {
 /// [DamageDetectionService.box], which owns preprocessing/inference/NMS.
 class BoxDamageDetector implements PackagingDamageDetector {
   @override
-  Future<DamageCheckResult> check(List<String> photoPaths) =>
-      DamageDetectionService.box.check(photoPaths);
+  Future<DamageCheckResult> check(List<String> photoPaths,
+          {List<String>? photoLabels}) =>
+      DamageDetectionService.box.check(photoPaths, photoLabels: photoLabels);
 
   @override
   Future<void> warmUp() => DamageDetectionService.box.warmUp();
@@ -49,8 +53,9 @@ class BoxDamageDetector implements PackagingDamageDetector {
 /// packs). Thin wrapper around [DamageDetectionService.foil].
 class FoilDamageDetector implements PackagingDamageDetector {
   @override
-  Future<DamageCheckResult> check(List<String> photoPaths) =>
-      DamageDetectionService.foil.check(photoPaths);
+  Future<DamageCheckResult> check(List<String> photoPaths,
+          {List<String>? photoLabels}) =>
+      DamageDetectionService.foil.check(photoPaths, photoLabels: photoLabels);
 
   @override
   Future<void> warmUp() => DamageDetectionService.foil.warmUp();
@@ -60,8 +65,9 @@ class FoilDamageDetector implements PackagingDamageDetector {
 /// [DamageDetectionService.bottle].
 class BottleDamageDetector implements PackagingDamageDetector {
   @override
-  Future<DamageCheckResult> check(List<String> photoPaths) =>
-      DamageDetectionService.bottle.check(photoPaths);
+  Future<DamageCheckResult> check(List<String> photoPaths,
+          {List<String>? photoLabels}) =>
+      DamageDetectionService.bottle.check(photoPaths, photoLabels: photoLabels);
 
   @override
   Future<void> warmUp() => DamageDetectionService.bottle.warmUp();
@@ -86,8 +92,9 @@ class PackagingDamageService {
 
   static Future<DamageCheckResult> check(
       PackagingType type,
-      List<String> photoPaths,
-      ) {
+      List<String> photoPaths, {
+        List<String>? photoLabels,
+      }) {
     final detector = _detectors[type];
     if (detector == null) {
       return Future.value(const DamageCheckResult(
@@ -95,7 +102,7 @@ class PackagingDamageService {
         message: 'No damage detector registered for this packaging type.',
       ));
     }
-    return detector.check(photoPaths);
+    return detector.check(photoPaths, photoLabels: photoLabels);
   }
 
   /// Warms up just the detector for [type] — called from CameraScreen once

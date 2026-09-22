@@ -1,10 +1,18 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
+import '../widgets/compliance_legend.dart';
 
+/// The welcome guide.
+///
+/// Shown as onboarding on first launch only (with a Get Started button), and
+/// re-openable any time from the Home header's legend sheet as a plain guide
+/// with a close button — pass no [onGetStarted] for that mode.
 class HomeScreen extends StatelessWidget {
-  final VoidCallback onGetStarted;
+  final VoidCallback? onGetStarted;
 
-  const HomeScreen({super.key, required this.onGetStarted});
+  const HomeScreen({super.key, this.onGetStarted});
+
+  bool get _isOnboarding => onGetStarted != null;
 
   @override
   Widget build(BuildContext context) {
@@ -37,20 +45,28 @@ class HomeScreen extends StatelessWidget {
                             color: AppColors.accent, size: 28),
                       ),
                       const SizedBox(width: 12),
-                      const Text(
-                        'CheckMuna',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
+                      const Expanded(
+                        child: Text(
+                          'CheckMuna',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
                         ),
                       ),
+                      if (!_isOnboarding)
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          tooltip: 'Close guide',
+                        ),
                     ],
                   ),
                   const SizedBox(height: 20),
-                  const Text(
-                    'Welcome!',
+                  Text(
+                    _isOnboarding ? 'Welcome!' : 'Guide',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 30,
@@ -96,14 +112,14 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.inventory_2_outlined,
                       title: 'Say what you are holding',
                       description:
-                      'Damage Detection and Inspection Mode ask for the packaging type first — Box, Foil, or Bottle — so the right check runs. Check Labels goes straight to the camera.',
+                      'Every check asks for the packaging type first — Box, Foil, or Bottle — so the right check runs. Foil is not required to carry an ingredient list, so a missing one is not flagged.',
                     ),
                     _Step(
                       number: '3',
                       icon: Icons.camera_alt_outlined,
                       title: 'Capture each step',
                       description:
-                      'The camera walks you through the shots one at a time: three for a label check (product name, expiration date, ingredient list), four sides for a packaging check. Fit the target inside the on-screen frame before tapping the shutter — only what is inside the frame is read.',
+                      'The camera walks you through the shots one at a time: three for a label check (product name, expiration date, ingredient list), four sides for a box or bottle, front and back for foil. Fit the target inside the on-screen frame before tapping the shutter — only what is inside the frame is read. Each label step takes a quick burst of three photos (the shutter counts 1/3, 2/3, 3/3), so hold still until it finishes; the app combines the three readings so a word one photo misreads is corrected by the others.',
                     ),
                     _Step(
                       number: '4',
@@ -117,7 +133,7 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.folder_outlined,
                       title: 'Name and save',
                       description:
-                      'Give the scan a name so you can find it later. Saved scans, with their photos, live in the Records tab — view, rename, or delete them any time.',
+                      'Give the scan a name so you can find it later. Saved scans, with their photos, live in the Records tab — view or delete them any time. If you agreed to share scan data, each saved scan is also sent to the FDA monitoring dashboard; you can change this from the cloud (data sharing) button on Home.',
                     ),
                     const SizedBox(height: 24),
 
@@ -165,69 +181,15 @@ class HomeScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    _ComplianceLegendItem(
-                      color: const Color(0xFF4CAF50),
-                      label: 'Compliant',
-                      description:
-                      'Product is registered and safe to consume. Follow instructions for proper dosage.',
-                    ),
-                    _ComplianceLegendItem(
-                      color: const Color(0xFFFF9800),
-                      label: 'Non-Compliant',
-                      description:
-                      'Product does not meet FDA standards. Inadvisable to consume — report to the local FDA hotline.',
-                    ),
-                    _ComplianceLegendItem(
-                      color: const Color(0xFFE57373),
-                      label: 'Warning',
-                      description:
-                      'The product matched an FDA advisory. Needs manual verification — confirm its status with the local FDA hotline before sale or use.',
-                    ),
+                    const ComplianceLegend(),
                     const SizedBox(height: 24),
-
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceAlt,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: AppColors.accent.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Icon(Icons.phone_outlined,
-                                color: AppColors.accent, size: 22),
-                          ),
-                          const SizedBox(width: 14),
-
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('FDA Philippines Hotline',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.text)),
-                              const SizedBox(height: 2),
-                              Text('(02) 8807-0751',
-                                  style: TextStyle(
-                                      fontSize: 13, color: AppColors.muted)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
+                    const FdaHotlineCard(),
                   ],
                 ),
               ),
             ),
 
+            if (_isOnboarding)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
               child: SizedBox(
@@ -419,58 +381,6 @@ class _ButtonNote extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ComplianceLegendItem extends StatelessWidget {
-  final Color color;
-  final String label;
-  final String description;
-
-  const _ComplianceLegendItem({
-    required this.color,
-    required this.label,
-    required this.description,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 14,
-            height: 14,
-            margin: const EdgeInsets.only(top: 2),
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: color)),
-                const SizedBox(height: 2),
-                Text(description,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.muted,
-                        height: 1.5)),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

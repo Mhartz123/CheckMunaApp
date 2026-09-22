@@ -11,9 +11,12 @@ import '../services/app_storage.dart';
 import '../services/date_code_parser.dart';
 import '../services/ocr_geometry.dart';
 import '../services/ocr_preprocessor.dart';
+import '../services/product_name_picker.dart';
 import '../services/compliance_engine.dart';
 import '../services/image_cropper.dart';
 import '../services/scan_store.dart';
+import '../services/app_prefs.dart';
+import '../services/ocr_fusion.dart';
 import '../services/report_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/capture_tips.dart';
@@ -56,11 +59,22 @@ class _FrameVote {
   final int agreeing;
   final int total;
 
+  /// How the frames' texts were combined, when more than one frame read
+  /// anything. Null for a single-frame capture.
+  final FusionReport? fusion;
+
+  /// The reading used is the fused one rather than one frame's own. For the
+  /// name and ingredient slots that is always the case with several frames;
+  /// for the expiry only when no date had a majority of frames behind it.
+  final bool fused;
+
   const _FrameVote({
     required this.read,
     required this.frameIndex,
     required this.agreeing,
     required this.total,
+    this.fusion,
+    this.fused = false,
   });
 
   bool get isMultiFrame => total > 1;
@@ -83,6 +97,9 @@ class _SlotRead {
   final int recognizeRuns;
   final double preprocessMs;
 
+  /// Time spent combining several frames' texts ([OcrFusion]); 0 for one.
+  final double fusionMs;
+
   const _SlotRead({
     this.text,
     this.dateCode,
@@ -90,6 +107,7 @@ class _SlotRead {
     this.recognizeMs = 0,
     this.recognizeRuns = 0,
     this.preprocessMs = 0,
+    this.fusionMs = 0,
   });
 }
 
@@ -219,30 +237,25 @@ class _CameraScreenState extends State<CameraScreen>
 
   bool get _isLabelPhase => _phase == _CapturePhase.label;
 
+  /// The packaging steps for the chosen type — four sides for a box or
+  /// bottle, front and back only for foil (see [PackagingTypeX.captureSlots]).
   List<_BoxSpec> get _boxSlots {
-    final typeLabel = (widget.packagingType ?? PackagingType.box).label;
+    final type = widget.packagingType ?? PackagingType.box;
+    final typeLabel = type.label;
     final lower = typeLabel.toLowerCase();
+    String helperFor(BoxSlot slot) => switch (slot) {
+          BoxSlot.front => 'Fit the whole front of the $lower inside the guide',
+          BoxSlot.side1 => 'Fit one side of the $lower inside the guide',
+          BoxSlot.side2 => 'Fit the other side of the $lower inside the guide',
+          BoxSlot.back => 'Fit the whole back of the $lower inside the guide',
+        };
     return [
-      (
-      slot: BoxSlot.front,
-      title: '$typeLabel — Front',
-      helper: 'Fit the whole front of the $lower inside the guide',
-      ),
-      (
-      slot: BoxSlot.side1,
-      title: '$typeLabel — Side',
-      helper: 'Fit one side of the $lower inside the guide',
-      ),
-      (
-      slot: BoxSlot.side2,
-      title: '$typeLabel — Other side',
-      helper: 'Fit the other side of the $lower inside the guide',
-      ),
-      (
-      slot: BoxSlot.back,
-      title: '$typeLabel — Back',
-      helper: 'Fit the whole back of the $lower inside the guide',
-      ),
+      for (final slot in type.captureSlots)
+        (
+        slot: slot,
+        title: '$typeLabel — ${slot.label}',
+        helper: helperFor(slot),
+        ),
     ];
   }
 
@@ -252,9 +265,23 @@ class _CameraScreenState extends State<CameraScreen>
   String get _currentTitle =>
       _isLabelPhase ? _labelSlots[_slotIndex].title : _boxSlots[_slotIndex].title;
 
-  String get _currentHelper => _isLabelPhase
-      ? _labelSlots[_slotIndex].helper
-      : _boxSlots[_slotIndex].helper;
+  String get _currentHelper {
+    if (!_isLabelPhase) return _boxSlots[_slotIndex].helper;
+    final spec = _labelSlots[_slotIndex];
+    final type = widget.packagingType;
+    if (spec.slot == PhotoSlot.ingredients &&
+        type != null &&
+        !type.requiresIngredientList) {
+      return 'Frame the ingredient list if the ${type.label.toLowerCase()} '
+          'has one — it is optional here';
+    }
+    return spec.helper;
+  }
+
+  /// What the pack is called on screen: the chosen packaging type, or
+  /// "packaging" for a flow that did not ask.
+  String get _packagingNoun =>
+      widget.packagingType?.label.toLowerCase() ?? 'packaging';
 
   PhotoSlot? get _currentLabelSlot =>
       _isLabelPhase ? _labelSlots[_slotIndex].slot : null;
@@ -287,7 +314,7 @@ class _CameraScreenState extends State<CameraScreen>
     final typeLabel = widget.packagingType?.label.toUpperCase();
     switch (widget.mode) {
       case CameraMode.label:
-        return 'LABEL CHECK';
+        return typeLabel == null ? 'LABEL CHECK' : '$typeLabel LABEL CHECK';
       case CameraMode.damage:
         return '$typeLabel DAMAGE CHECK';
       case CameraMode.inspection:
@@ -325,11 +352,22 @@ class _CameraScreenState extends State<CameraScreen>
 
   static const double _landscapeBadgeRowHeight = 56;
 
+  /// Width of the landscape shutter column (the 76 dp shutter) plus its
+  /// 16 dp edge margin.
+  static const double _landscapeShutterColumnWidth = 16 + 76;
+
+  /// Keeps the guide clear of both side columns. Centring it across the full
+  /// width left the info column (guide presets, thumbnails, "no ingredient
+  /// list") under [_landscapeColumnMinWidth] on narrow or notched phones, and
+  /// _landscapeOverlay then dropped it entirely.
   Rect get _landscapeGuideBand {
     return Rect.fromLTRB(
-      _viewPadding.left,
+      _viewPadding.left + 16 + _landscapeColumnMinWidth + 14,
       _viewPadding.top + _landscapeBadgeRowHeight,
-      _previewSize.width - _viewPadding.right,
+      _previewSize.width -
+          _viewPadding.right -
+          _landscapeShutterColumnWidth -
+          14,
       _previewSize.height - _viewPadding.bottom - 16,
     );
   }
@@ -385,7 +423,13 @@ class _CameraScreenState extends State<CameraScreen>
         : _CapturePhase.label;
     _initCamera(_cameraIndex);
 
-    ComplianceEngine.warmUp(packagingType: widget.packagingType);
+    // A label check now carries a packaging type too (it decides whether an
+    // ingredient list is required), but has no damage step, so it must not
+    // pay to load a damage model it will never run.
+    ComplianceEngine.warmUp(
+      packagingType:
+          widget.mode == CameraMode.label ? null : widget.packagingType,
+    );
 
     _applyCameraOrientations();
   }
@@ -509,17 +553,19 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
-  /// Frames taken for the expiration slot.
+  /// Frames taken for every label slot.
   ///
-  /// A dot-matrix code sits right at the recognizer's limit, and which
-  /// characters survive changes shot to shot as focus, hand shake and the
-  /// angle of the light move. Three frames read independently and voted is a
-  /// far stronger signal than one lucky exposure, and frames DISAGREEING is
-  /// itself the honest answer that the code could not be read.
+  /// Which characters survive recognition changes shot to shot as focus, hand
+  /// shake and the angle of the light move — a dot-matrix date most of all,
+  /// but small ingredient print and glossy front panels too. Three frames
+  /// read independently fail independently, so where one misreads a word the
+  /// other two usually read it right. [OcrFusion] combines them word by word
+  /// (and character by character) so that repair actually happens, and the
+  /// expiry additionally votes on the parsed date itself.
   ///
-  /// Only this slot pays the cost. The name and ingredient panels are ordinary
-  /// solid print where a second frame buys almost nothing.
-  static const int kExpiryFrameCount = 3;
+  /// Three is the smallest number with a strict majority. More frames cost a
+  /// full recognition pass each for diminishing returns.
+  static const int kLabelFrameCount = 3;
 
   /// Takes one picture and returns the guide-cropped path, or null on failure.
   Future<String?> _captureCrop({required bool cropToGuide}) async {
@@ -581,8 +627,7 @@ class _CameraScreenState extends State<CameraScreen>
       }
 
       final slot = _labelSlots[_slotIndex].slot;
-      final frameCount =
-          slot == PhotoSlot.expiration ? kExpiryFrameCount : 1;
+      const frameCount = kLabelFrameCount;
 
       final paths = <String>[];
       for (var i = 0; i < frameCount; i++) {
@@ -723,10 +768,8 @@ class _CameraScreenState extends State<CameraScreen>
         final read =
             _slotReads[spec.slot] ?? await _readSlot(spec.slot, path);
 
-        // The cost of the reading that was actually used. On a multi-frame
-        // slot the frames that lost the vote are excluded on purpose: this is
-        // meant to answer "what does reading one label crop cost", and the
-        // frame count is a separate capture-strategy choice.
+        // What reading this slot cost, across every frame: all of them fed
+        // the fused answer, so none of them is excluded.
         if (read.recognizeRuns > 0) {
           timings.add(
             TimingGroup.ocr,
@@ -738,6 +781,9 @@ class _CameraScreenState extends State<CameraScreen>
         if (read.preprocessMs > 0) {
           timings.add(TimingGroup.ocr, 'Crop preprocessing',
               read.preprocessMs);
+        }
+        if (read.fusionMs > 0) {
+          timings.add(TimingGroup.ocr, 'Multi-shot fusion', read.fusionMs);
         }
 
         final recognized = read.text;
@@ -788,22 +834,44 @@ class _CameraScreenState extends State<CameraScreen>
     // Frames disagreeing outranks any blur measurement: it is direct evidence
     // that the code is being read differently each time, which no sharpness
     // number can tell you.
-    if (vote.isMultiFrame && vote.agreeing > 0 && !vote.unanimous) {
-      hint = 'Only ${vote.agreeing} of ${vote.total} shots read this the same '
-          '— worth retaking';
+    final fusion = vote.fusion;
+    String? note;
+    if (slot == PhotoSlot.expiration) {
+      if (vote.fused) {
+        hint = 'The ${vote.total} shots each read the date differently; this '
+            'is the date they agree on digit by digit — check it matches the pack';
+      } else if (vote.isMultiFrame && vote.agreeing > 0 && !vote.unanimous) {
+        hint = 'Only ${vote.agreeing} of ${vote.total} shots read this the same '
+            '— worth retaking';
+      }
+    } else if (vote.isMultiFrame && fusion != null) {
+      if (fusion.framesAgreeing < 2) {
+        hint = 'The ${vote.total} shots read this quite differently '
+            '— worth retaking';
+      }
+      if (fusion.repairs > 0) {
+        note = '${fusion.repairs} word${fusion.repairs == 1 ? '' : 's'} '
+            'corrected using the other shots';
+      }
     }
     final summary = _readSummary(slot, read);
     final good = _isGoodRead(slot, read);
 
+    // Scroll-controlled so the sheet is not capped at 9/16 of the screen: in
+    // landscape that cap is ~200 dp, which clipped the Retake / Use this
+    // buttons off the bottom and left the user stuck. The read-out scrolls;
+    // the buttons stay pinned below it.
     final accepted = await showModalBottomSheet<bool>(
       context: context,
       isDismissible: false,
       enableDrag: false,
+      isScrollControlled: true,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) => Padding(
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -820,6 +888,12 @@ class _CameraScreenState extends State<CameraScreen>
               ),
             ),
             const SizedBox(height: 16),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: Image.file(
@@ -831,11 +905,12 @@ class _CameraScreenState extends State<CameraScreen>
             ),
             const SizedBox(height: 16),
             Text(
-              vote.isMultiFrame
-                  ? (slot == PhotoSlot.expiration
+              !vote.isMultiFrame
+                  ? (slot == PhotoSlot.expiration ? 'Date read' : 'Text read')
+                  : slot == PhotoSlot.expiration && !vote.fused
                       ? 'Date read  ·  ${vote.agreeing}/${vote.total} shots agree'
-                      : 'Text read  ·  ${vote.agreeing}/${vote.total} shots agree')
-                  : (slot == PhotoSlot.expiration ? 'Date read' : 'Text read'),
+                      : '${slot == PhotoSlot.expiration ? 'Date' : 'Text'} read  ·  '
+                          'combined from ${vote.total} shots',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -852,6 +927,22 @@ class _CameraScreenState extends State<CameraScreen>
                 color: good ? AppColors.text : const Color(0xFFE57373),
               ),
             ),
+            if (note != null) ...[
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.auto_fix_high, size: 16, color: AppColors.accent),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      note,
+                      style: TextStyle(fontSize: 13, color: AppColors.accent),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (hint != null) ...[
               const SizedBox(height: 10),
               Row(
@@ -870,6 +961,10 @@ class _CameraScreenState extends State<CameraScreen>
                 ],
               ),
             ],
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 20),
             Row(
               children: [
@@ -906,6 +1001,7 @@ class _CameraScreenState extends State<CameraScreen>
             ),
           ],
         ),
+      ),
       ),
     );
     return accepted ?? false;
@@ -955,13 +1051,21 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// Reads every frame of a capture and votes on the answer.
+  /// Reads every frame of a capture and combines them into one answer.
   ///
-  /// Agreement is decided on the extracted VALUE, not on the recognized text:
-  /// two frames can disagree character by character and still yield the same
-  /// date, and it is the date that the verdict depends on. A slot with only
-  /// one frame falls through as a vote of one, so callers need no special
-  /// case.
+  /// Every frame's text is fused by [OcrFusion]: a word one frame misread is
+  /// replaced by the spelling the other frames agree on. For the name and
+  /// ingredient slots the fused text IS the reading.
+  ///
+  /// The expiry is decided on the extracted VALUE first, not on the text: two
+  /// frames can disagree character by character and still yield the same
+  /// date, and it is the date the verdict depends on. When a majority of
+  /// frames parse to the same date, that date stands. Only when they don't —
+  /// each frame lost a different digit — is the date parsed from the fused
+  /// text instead, which is exactly the case fusion exists for.
+  ///
+  /// A slot with only one frame falls through as a vote of one, so callers
+  /// need no special case.
   Future<_FrameVote> _readFrames(PhotoSlot slot, List<String> paths) async {
     final reads = <_SlotRead>[];
     for (final path in paths) {
@@ -973,6 +1077,65 @@ class _CameraScreenState extends State<CameraScreen>
           read: reads.first, frameIndex: 0, agreeing: 1, total: 1);
     }
 
+    // A frame that failed the blur/contrast gate still votes, just with less
+    // say: it is more likely to be the one that misread.
+    final weights = [
+      for (final r in reads)
+        r.quality == null
+            ? 0.8
+            : r.quality!.passes
+                ? 1.0
+                : 0.6,
+    ];
+    final fuseWatch = Stopwatch()..start();
+    final fusion = OcrFusion.fuse(
+      [for (final r in reads) r.text],
+      weights: weights,
+    );
+    fuseWatch.stop();
+    final fusionMs = fuseWatch.elapsedMicroseconds / 1000.0;
+    if (fusion != null) debugPrint('OCR $slot fusion: ${fusion.report}');
+
+    // All frames fed the answer, so all of their cost is reported.
+    final recognizeMs = reads.fold<double>(0, (a, r) => a + r.recognizeMs);
+    final recognizeRuns = reads.fold<int>(0, (a, r) => a + r.recognizeRuns);
+    final preprocessMs = reads.fold<double>(0, (a, r) => a + r.preprocessMs);
+
+    if (slot != PhotoSlot.expiration) {
+      if (fusion == null) {
+        debugPrint('OCR $slot: ${reads.length} frames, none readable');
+        return _FrameVote(
+            read: reads.first, frameIndex: 0, agreeing: 0, total: reads.length);
+      }
+      final pivot = fusion.report.pivotIndex;
+      return _FrameVote(
+        read: _SlotRead(
+          text: fusion.text,
+          quality: reads[pivot].quality,
+          recognizeMs: recognizeMs,
+          recognizeRuns: recognizeRuns,
+          preprocessMs: preprocessMs,
+          fusionMs: fusionMs,
+        ),
+        frameIndex: pivot,
+        agreeing: fusion.report.framesAgreeing,
+        total: reads.length,
+        fusion: fusion.report,
+        fused: true,
+      );
+    }
+
+    _SlotRead withCosts(_SlotRead r, {RecognizedText? text, DateCode? code}) =>
+        _SlotRead(
+          text: text ?? r.text,
+          dateCode: code ?? r.dateCode,
+          quality: r.quality,
+          recognizeMs: recognizeMs,
+          recognizeRuns: recognizeRuns,
+          preprocessMs: preprocessMs,
+          fusionMs: fusionMs,
+        );
+
     // Tally by extracted value. Frames that read nothing are counted in the
     // total but can never win, so three unreadable frames stay unreadable
     // rather than one of them being promoted by default.
@@ -983,25 +1146,69 @@ class _CameraScreenState extends State<CameraScreen>
       (tally[key] ??= <int>[]).add(i);
     }
 
-    if (tally.isEmpty) {
+    List<int> winners = const [];
+    if (tally.isNotEmpty) {
+      var bestKey = tally.keys.first;
+      for (final entry in tally.entries) {
+        if (entry.value.length > tally[bestKey]!.length) bestKey = entry.key;
+      }
+      winners = tally[bestKey]!;
+      debugPrint('OCR $slot: ${winners.length}/${reads.length} frames agree '
+          'on "$bestKey"');
+    }
+
+    // A strict majority of frames on one date is the strongest evidence
+    // there is; fusion does not get to overrule it.
+    if (winners.length * 2 > reads.length) {
+      return _FrameVote(
+        read: withCosts(reads[winners.first]),
+        frameIndex: winners.first,
+        agreeing: winners.length,
+        total: reads.length,
+        fusion: fusion?.report,
+      );
+    }
+
+    // No majority: parse the date out of the fused text.
+    if (fusion != null) {
+      final code = DateCodeParser.parse(
+        fusion.text,
+        maxSkewDegrees:
+            OcrGeometry.maxSkewDegreesFor(_profileFor(PhotoSlot.expiration)),
+      );
+      final fusedRead = _SlotRead(text: fusion.text, dateCode: code);
+      final fusedKey = _voteKey(slot, fusedRead);
+      if (fusedKey != null) {
+        final backers = tally[fusedKey] ?? const <int>[];
+        debugPrint('OCR $slot: no majority; fused text parses to "$fusedKey" '
+            '(${backers.length} frame(s) read it on their own)');
+        final pivot = fusion.report.pivotIndex;
+        return _FrameVote(
+          read: withCosts(reads[pivot], text: fusion.text, code: code),
+          frameIndex: pivot,
+          agreeing: backers.length,
+          total: reads.length,
+          fusion: fusion.report,
+          fused: true,
+        );
+      }
+    }
+
+    if (winners.isEmpty) {
       debugPrint('OCR $slot: ${reads.length} frames, none readable');
       return _FrameVote(
-          read: reads.first, frameIndex: 0, agreeing: 0, total: reads.length);
+          read: withCosts(reads.first),
+          frameIndex: 0,
+          agreeing: 0,
+          total: reads.length,
+          fusion: fusion?.report);
     }
-
-    var bestKey = tally.keys.first;
-    for (final entry in tally.entries) {
-      if (entry.value.length > tally[bestKey]!.length) bestKey = entry.key;
-    }
-    final winners = tally[bestKey]!;
-
-    debugPrint('OCR $slot: ${winners.length}/${reads.length} frames agree '
-        'on "$bestKey"');
     return _FrameVote(
-      read: reads[winners.first],
+      read: withCosts(reads[winners.first]),
       frameIndex: winners.first,
       agreeing: winners.length,
       total: reads.length,
+      fusion: fusion?.report,
     );
   }
 
@@ -1247,19 +1454,22 @@ class _CameraScreenState extends State<CameraScreen>
     return score;
   }
 
-  /// The front panel's text with its display type hoisted to the front, since
-  /// LabelParser takes the product name from the first usable line.
+  /// The front panel's text with the likely product name hoisted to the
+  /// front, since LabelParser takes the product name from the first usable
+  /// line.
   ///
-  /// Each prominent line is kept whole and on its own line. Joining the
-  /// tallest ELEMENTS instead, which is what this used to do, glued fragments
-  /// from opposite ends of the panel into one string - an MX3 carton came back
-  /// as "M MS" and a Medicol carton as "LE NT DNE*" that way.
+  /// Each line is kept whole and on its own line. Joining the tallest
+  /// ELEMENTS instead, which is what this used to do, glued fragments from
+  /// opposite ends of the panel into one string - an MX3 carton came back as
+  /// "M MS" and a Medicol carton as "LE NT DNE*" that way. Which line comes
+  /// first is decided by [ProductNamePicker], so a brand set below a larger
+  /// generic name is still found.
   String _frontTextByProminence(RecognizedText recognized) {
     final lines = OcrGeometry.horizontalLines(
       recognized,
       maxSkewDegrees: kProductNameMaxSkewDegrees,
     );
-    final prominent = OcrGeometry.prominentLines(lines);
+    final prominent = ProductNamePicker.orderForName(lines);
     final headline = prominent
         .map((line) => line.text.trim())
         .where((text) => text.isNotEmpty)
@@ -1271,6 +1481,14 @@ class _CameraScreenState extends State<CameraScreen>
   List<String> get _capturedBoxPaths => [
     for (final spec in _boxSlots)
       if (_boxPaths[spec.slot] != null) _boxPaths[spec.slot]!,
+  ];
+
+  /// Capture-slot names for [_capturedBoxPaths], same order and length, so the
+  /// per-photo damage report can say "Front" rather than "Photo 1". Built from
+  /// the same list comprehension so a skipped slot drops out of both.
+  List<String> get _capturedBoxLabels => [
+    for (final spec in _boxSlots)
+      if (_boxPaths[spec.slot] != null) spec.slot.label,
   ];
 
   Future<void> _runLabelAnalysis() async {
@@ -1293,6 +1511,7 @@ class _CameraScreenState extends State<CameraScreen>
       _declaredMissing.contains(PhotoSlot.expiration),
       ingredientsDeclaredMissing:
       _declaredMissing.contains(PhotoSlot.ingredients),
+      packagingType: widget.packagingType,
       onStageChange: _mapStageChange,
     );
 
@@ -1329,6 +1548,7 @@ class _CameraScreenState extends State<CameraScreen>
     final record = await ComplianceEngine.analyzeDamage(
       packagingType: widget.packagingType!,
       boxPhotoPaths: _capturedBoxPaths,
+      boxPhotoLabels: _capturedBoxLabels,
     );
 
     await _finishAnalysis(record);
@@ -1349,6 +1569,7 @@ class _CameraScreenState extends State<CameraScreen>
       combinedText: ocr.combinedText,
       packagingType: widget.packagingType!,
       boxPhotoPaths: _capturedBoxPaths,
+      boxPhotoLabels: _capturedBoxLabels,
       ocrConfidence: ocr.nameConfidence,
       ocrTimings: ocr.timings,
       dateCode: ocr.dateCode,
@@ -1539,6 +1760,10 @@ class _CameraScreenState extends State<CameraScreen>
       builder: (context) {
         bool isTaken = false;
         bool isEmpty = true;
+        // Per-scan opt-out. Only meaningful when the user has agreed to
+        // share at all; with sharing off nothing is uploaded regardless.
+        final bool sharingOn = AppPrefs.instance.sharingAllowed;
+        bool shareThisScan = sharingOn;
 
         return StatefulBuilder(
           builder: (context, setSheetState) {
@@ -1584,6 +1809,14 @@ class _CameraScreenState extends State<CameraScreen>
                   ),
                   const SizedBox(height: 18),
 
+                  // In landscape the keyboard leaves ~130 dp above it, so the
+                  // form scrolls and Cancel / Save record stay pinned below.
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                   Row(
                     children: [
                       Container(
@@ -1676,6 +1909,16 @@ class _CameraScreenState extends State<CameraScreen>
                       ),
                     ],
                   ),
+                  const SizedBox(height: 14),
+                  _ShareScanNotice(
+                    sharingOn: sharingOn,
+                    shareThisScan: shareThisScan,
+                    onChanged: (v) => setSheetState(() => shareThisScan = v),
+                  ),
+                        ],
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 20),
 
                   Row(
@@ -1712,7 +1955,8 @@ class _CameraScreenState extends State<CameraScreen>
                               : () async {
                             final raw = nameController.text.trim();
                             Navigator.of(context).pop();
-                            final saved = await _saveRecord(raw, record);
+                            final saved = await _saveRecord(raw, record,
+                                share: sharingOn && shareThisScan);
                             if (saved && cameraContext.mounted) {
 
                               Navigator.of(cameraContext)
@@ -1748,7 +1992,8 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  Future<bool> _saveRecord(String rawName, ScanRecord record) async {
+  Future<bool> _saveRecord(String rawName, ScanRecord record,
+      {required bool share}) async {
     try {
       final dir = await ScanStore.save(
         rawName: rawName,
@@ -1757,16 +2002,20 @@ class _CameraScreenState extends State<CameraScreen>
         record: record,
       );
 
-      ReportService.submit(
-        recordDir: dir,
-        record: record,
-        productName: rawName,
-      );
+      if (share) {
+        ReportService.submit(
+          recordDir: dir,
+          record: record,
+          productName: rawName,
+        );
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Record "$rawName" saved!'),
+            content: Text(share
+                ? 'Record "$rawName" saved and shared with the FDA dashboard.'
+                : 'Record "$rawName" saved on this device.'),
             backgroundColor: const Color(0xFF4CAF50),
           ),
         );
@@ -2129,8 +2378,8 @@ class _CameraScreenState extends State<CameraScreen>
             Flexible(
               child: Text(
                 _currentLabelSlot == PhotoSlot.expiration
-                    ? 'No expiration date on the box'
-                    : 'No ingredient list on the box',
+                    ? 'No expiration date on the $_packagingNoun'
+                    : 'No ingredient list on the $_packagingNoun',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,
@@ -2804,6 +3053,100 @@ class _ScanStepRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The save sheet's statement of where this scan goes, with a switch to keep
+/// just this one scan off the FDA dashboard.
+///
+/// Spelled out on every save — not only in the one-time consent notice — so
+/// a user testing their own or an unreleased product sees, at the moment it
+/// matters, that the scan is about to be uploaded.
+class _ShareScanNotice extends StatelessWidget {
+  final bool sharingOn;
+  final bool shareThisScan;
+  final ValueChanged<bool> onChanged;
+
+  const _ShareScanNotice({
+    required this.sharingOn,
+    required this.shareThisScan,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!sharingOn) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.phone_android, size: 14, color: AppColors.muted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Data sharing is off, so this scan stays on this device only. '
+              'You can change this from the cloud (data sharing) button on Home.',
+              style: TextStyle(
+                  fontSize: 12, height: 1.4, color: AppColors.muted),
+            ),
+          ),
+        ],
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 10),
+      decoration: BoxDecoration(
+        color: shareThisScan ? AppColors.warningBg : AppColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                  shareThisScan
+                      ? Icons.cloud_upload_outlined
+                      : Icons.phone_android,
+                  size: 18,
+                  color: shareThisScan
+                      ? AppColors.warningText
+                      : AppColors.muted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Share this scan with the FDA dashboard',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                    )),
+              ),
+              Switch(
+                value: shareThisScan,
+                activeThumbColor: AppColors.accent,
+                onChanged: onChanged,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Text(
+              shareThisScan
+                  ? 'The photos and result will be uploaded and viewed by FDA '
+                      'monitors. Turn this off if this is your own or an '
+                      'unreleased product.'
+                  : 'This scan will be saved on this device only.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: shareThisScan
+                    ? AppColors.warningText
+                    : AppColors.muted,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

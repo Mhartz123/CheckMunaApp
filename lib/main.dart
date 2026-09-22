@@ -5,8 +5,10 @@ import 'screens/splash_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/records_screen.dart';
+import 'screens/consent_screen.dart';
 import 'widgets/floating_nav_bar.dart';
 import 'services/app_storage.dart';
+import 'services/app_prefs.dart';
 import 'services/theme_controller.dart';
 import 'widgets/theme_fade.dart';
 
@@ -19,6 +21,7 @@ Future<void> main() async {
   globalCameras = await availableCameras();
 
   await ThemeController.instance.load();
+  await AppPrefs.instance.load();
 
   await AppStorage.clearCaptures();
   runApp(const UIPrototypeApp());
@@ -73,9 +76,16 @@ class RootNavigator extends StatefulWidget {
   State<RootNavigator> createState() => _RootNavigatorState();
 }
 
+/// Splash, then — first launch only — the welcome guide and the data-sharing
+/// consent, then the app.
+///
+/// The guide is skipped once [AppPrefs.onboardingDone] is set; it stays
+/// reachable from the legend button on Home. Consent is asked whenever there
+/// is no current answer (first launch, or the notice's version was bumped),
+/// so no scan can be saved — and nothing uploaded — before the user decides.
 class _RootNavigatorState extends State<RootNavigator> {
   bool _showSplash = true;
-  bool _showHome = true;
+  bool _showGuide = !AppPrefs.instance.onboardingDone;
 
   @override
   Widget build(BuildContext context) {
@@ -87,13 +97,20 @@ class _RootNavigatorState extends State<RootNavigator> {
         onFinished: () => setState(() => _showSplash = false),
       );
       key = const ValueKey('splash');
-    } else if (_showHome) {
+    } else if (_showGuide) {
       child = HomeScreen(
-        onGetStarted: () => setState(() => _showHome = false),
+        onGetStarted: () => setState(() => _showGuide = false),
       );
       key = const ValueKey('home');
+    } else if (AppPrefs.instance.needsConsent) {
+      child = ConsentScreen(
+        onDecided: () async {
+          await AppPrefs.instance.completeOnboarding();
+          if (mounted) setState(() {});
+        },
+      );
+      key = const ValueKey('consent');
     } else {
-
       child = AppShell();
       key = const ValueKey('app');
     }
