@@ -173,6 +173,30 @@ void main() {
     });
   });
 
+  group('stacked logo above the product name', () {
+    // Geometry traced off a PearlSkin White Tomato bottle: a two-line "daily
+    // plus" logo set in the largest type on the panel, the product name a
+    // size below it, and the category line below that. The panel used to come
+    // back as "plus" — the single tallest line.
+    List<TextLine> pearlSkinPanel() => <TextLine>[
+          _line('daily', left: 150, top: 40, width: 80, height: 30),
+          _line('plus', left: 150, top: 70, width: 70, height: 32),
+          _line('PearlSkin White Tomato',
+              left: 30, top: 140, width: 330, height: 26),
+          _line('Whitening Supplement',
+              left: 80, top: 178, width: 230, height: 16),
+        ];
+
+    test('picks the product name over the larger logo', () {
+      expect(_pick(pearlSkinPanel()), 'PearlSkin White Tomato');
+    });
+
+    test('a joining word from the logo is never the name', () {
+      final ordered = ProductNamePicker.orderForName(pearlSkinPanel());
+      expect(ordered.map((l) => l.text), isNot(contains('plus')));
+    });
+  });
+
   group('word classification', () {
     test('generic words tolerate one OCR misread on longer terms', () {
       expect(ProductNamePicker.isGenericWord('hydroxlde'), isTrue);
@@ -194,6 +218,13 @@ void main() {
       expect(ProductNamePicker.isDescriptorLine('CHEWABLE TABLET'), isTrue);
       expect(ProductNamePicker.isDescriptorLine('178 mg / 233 mg / 30 mg'), isTrue);
       expect(ProductNamePicker.isDescriptorLine('FOOD SUPPLEMENT'), isTrue);
+      expect(ProductNamePicker.isDescriptorLine('Whitening Supplement'), isTrue);
+      // A line of nothing but joining words names nothing, however large.
+      expect(ProductNamePicker.isDescriptorLine('plus'), isTrue);
+      expect(ProductNamePicker.isDescriptorLine('PLUS'), isTrue);
+      expect(ProductNamePicker.isDescriptorLine('AND'), isTrue);
+      // But a joining word inside a real name does not disqualify it.
+      expect(ProductNamePicker.isDescriptorLine('Daily Plus'), isFalse);
       expect(ProductNamePicker.isDescriptorLine('Kremil - S'), isFalse);
       // Short alphanumeric brands have no three-letter word but are names.
       expect(ProductNamePicker.isDescriptorLine('MX3'), isFalse);

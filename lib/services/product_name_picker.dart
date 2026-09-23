@@ -28,6 +28,17 @@ const double kRegisteredMarkBonus = 0.3;
 const double kStrengthAdjacencyBonus = 0.2;
 const double kStrengthAdjacencyLineHeights = 1.5;
 
+/// Score added per significant word after the first, up to [kNameWordBonusMax].
+///
+/// A product name is usually more than one word; a logo broken across lines
+/// ("daily" / "plus") is one word per line. Both are set large, so height
+/// alone cannot separate them — a PearlSkin White Tomato bottle came back as
+/// "plus" for exactly that reason. The bonus is deliberately small: short
+/// one-word brands (MX3, Ceelin, Neozep) are real and common, so a longer
+/// line has to be nearly as large to overtake them, not merely longer.
+const double kNameWordBonus = 0.05;
+const double kNameWordBonusMax = 0.10;
+
 /// Generic (non-proprietary) names and salt/chemical words common on OTC
 /// packaging in the Philippines, lowercase.
 ///
@@ -89,6 +100,9 @@ const Set<String> kDescriptorTerms = <String>{
   'antidiarrheal', 'antispasmodic', 'antiemetic', 'anthelmintic',
   'multivitamin', 'food', 'supplement', 'dietary', 'herbal', 'medicine',
   'mcg', 'units',
+  // Supplement and cosmetic categories, the same class of word as 'antacid'
+  // above: they say what the product is for, never which product it is.
+  'whitening', 'slimming', 'nutraceutical',
 };
 
 /// Joining words ignored when measuring what a line is made of.
@@ -111,13 +125,21 @@ final RegExp _letterRun = RegExp(r'[A-Za-z]{2,}|[A-Za-z]\d|\d[A-Za-z]');
 /// printed prominently above the brand, so on a compliant carton the tallest
 /// text is the generic: a Kremil-S carton came back as "Aluminum Hydroxide".
 ///
+/// It fails a second way on supplements, where the largest type is a stacked
+/// logo rather than the product name: a "daily plus" logo over a PearlSkin
+/// White Tomato bottle reported the product as "plus", the single tallest
+/// line on the panel.
+///
 /// So generic-name lines are recognised and set aside, descriptor lines
-/// ("ANTACID", "CHEWABLE TABLET") are excluded, and the remaining large lines
-/// are scored by size, a ® or ™ mark, and whether they sit directly above the
-/// strength line — the brand's position in the generic / brand / strength
-/// layout. When nothing but generic lines is found, the product has no brand
-/// on this panel and the generic name is the right answer, so the tallest
-/// line wins exactly as before.
+/// ("ANTACID", "CHEWABLE TABLET", "WHITENING SUPPLEMENT") and lines that are
+/// nothing but joining words ("PLUS") are excluded, and the remaining large
+/// lines are scored by size, a ® or ™ mark, whether they sit directly above
+/// the strength or category line — the brand's position in the generic /
+/// brand / strength layout — and how many words they carry, which separates a
+/// full product name from one line of a stacked logo. When nothing but
+/// generic lines is found, the product has no brand on this panel and the
+/// generic name is the right answer, so the tallest line wins exactly as
+/// before.
 class ProductNamePicker {
   const ProductNamePicker._();
 
@@ -147,6 +169,7 @@ class ProductNamePicker {
       var score = lineHeight(line) / tallest;
       if (_registeredMark.hasMatch(line.text)) score += kRegisteredMarkBonus;
       if (_sitsAboveStrength(line, lines)) score += kStrengthAdjacencyBonus;
+      score += _wordCountBonus(line.text);
       brandScores[line] = score;
     }
 
@@ -226,9 +249,34 @@ class ProductNamePicker {
   static bool isDescriptorLine(String text) {
     final words = significantWords(text);
     if (words.isEmpty) {
+      // A line that is nothing but joining words — "PLUS", "AND", "WITH" —
+      // names nothing on its own, even though it clears the [_letterRun] test
+      // that keeps short brands like MX3 alive. Logos routinely set the joiner
+      // on its own line in the largest type on the panel, and that line then
+      // won the whole panel: a "daily plus" logo above "PearlSkin White
+      // Tomato" reported the product as "plus".
+      if (_isConnectorOnly(text)) return true;
       return !_letterRun.hasMatch(text.replaceAll(_strength, ''));
     }
     return words.every(kDescriptorTerms.contains);
+  }
+
+  /// Whether every alphabetic token on [text] is a joining word.
+  static bool _isConnectorOnly(String text) {
+    final tokens = text
+        .toLowerCase()
+        .split(_wordSplit)
+        .where((w) => w.isNotEmpty)
+        .toList();
+    return tokens.isNotEmpty && tokens.every(_connectors.contains);
+  }
+
+  /// [kNameWordBonus] per significant word after the first, capped.
+  static double _wordCountBonus(String text) {
+    final extra = significantWords(text).length - 1;
+    if (extra <= 0) return 0;
+    final bonus = extra * kNameWordBonus;
+    return bonus > kNameWordBonusMax ? kNameWordBonusMax : bonus;
   }
 
   /// Generic-name lines among [candidates] (sorted top to bottom).

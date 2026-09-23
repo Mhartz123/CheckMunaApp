@@ -216,7 +216,7 @@ class ReportBuilder {
     final (PdfColor fg, PdfColor bg, String label) = switch (status) {
       'COMPLIANT' => (_green, _greenBg, 'COMPLIANT'),
       'NON-COMPLIANT' => (_amber, _amberBg, 'NON-COMPLIANT'),
-      _ when _isWarning(status) => (_red, _redBg, 'WARNING'),
+      _ when _isWarning(status) => (_red, _redBg, 'WARNED'),
       _ => (_muted, _bg, 'UNREADABLE'),
     };
     return pw.Container(
@@ -594,7 +594,7 @@ class ReportBuilder {
         pw.SizedBox(width: 8),
         _statBox('Non-Compliant', '$nonCompliant', _amber, _amberBg),
         pw.SizedBox(width: 8),
-        _statBox('Warning', '$warning', _red, _redBg),
+        _statBox('Warned', '$warning', _red, _redBg),
       ],
     );
   }
@@ -693,7 +693,7 @@ class ReportBuilder {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                _isWarning(r.status) ? 'WARNING' : 'NON-COMPLIANT',
+                _isWarning(r.status) ? 'WARNED' : 'NON-COMPLIANT',
                 style: pw.TextStyle(
                     fontSize: 8.5,
                     fontWeight: pw.FontWeight.bold,

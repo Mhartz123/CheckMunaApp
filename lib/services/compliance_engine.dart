@@ -261,9 +261,9 @@ class ComplianceEngine {
 
     final tags = <String>[
       if (s.expired) 'expired',
-      if (s.expirationMissing) 'no expiration date',
+      if (s.expirationMissing) 'no / unreadable expiration date',
       if (s.expirationUnreadable) 'unreadable expiration date',
-      if (s.ingredientsMissing) 'no ingredient list',
+      if (s.ingredientsMissing) 'no / unreadable ingredient list',
       if (damageFails) 'packaging damage',
     ];
 
@@ -418,9 +418,9 @@ class ComplianceEngine {
     }
     final tags = <String>[
       if (s.expired) 'expired',
-      if (s.expirationMissing) 'no expiration date',
+      if (s.expirationMissing) 'no / unreadable expiration date',
       if (s.expirationUnreadable) 'unreadable expiration date',
-      if (s.ingredientsMissing) 'no ingredient list',
+      if (s.ingredientsMissing) 'no / unreadable ingredient list',
     ];
     return tags.isEmpty ? '—' : tags.join(', ');
   }
@@ -474,8 +474,9 @@ class ComplianceEngine {
           '(${s.fields.expiration}) has passed.');
     }
     if (s.expirationMissing) {
-      reasons.add('No expiration date is printed on the packaging '
-          '(verified by the user).');
+      reasons.add('No / unreadable expiration date — the user reported that '
+          'the packaging carries no expiration date, or one that cannot be '
+          'read.');
     }
     if (s.expirationUnreadable) {
       final note = s.dateCode?.note;
@@ -483,7 +484,8 @@ class ComplianceEngine {
           'it could not be checked${note == null ? '' : ' — $note'}');
     }
     if (s.ingredientsMissing) {
-      reasons.add('No ingredient list was detected on the label.');
+      reasons.add('No / unreadable ingredient list — none was detected on the '
+          'label, or the user reported that the packaging carries none.');
     }
     if (reasons.isEmpty && !omitFallback) {
       reasons.add('Could not confirm compliance from the scanned label.');

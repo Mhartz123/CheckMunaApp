@@ -112,21 +112,21 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.inventory_2_outlined,
                       title: 'Say what you are holding',
                       description:
-                      'Every check asks for the packaging type first — Box, Foil, or Bottle — so the right check runs. Foil is not required to carry an ingredient list, so a missing one is not flagged.',
+                      'Every check asks for the packaging type first — Box, Foil, or Bottle — so the right check runs. Foil is not required to carry an ingredient list, so a missing one is not flagged. Any check that reads a label also offers a reading mode on this screen: Accurate (the default) or Fast.',
                     ),
                     _Step(
                       number: '3',
                       icon: Icons.camera_alt_outlined,
                       title: 'Capture each step',
                       description:
-                      'The camera walks you through the shots one at a time: three for a label check (product name, expiration date, ingredient list), four sides for a box or bottle, front and back for foil. Fit the target inside the on-screen frame before tapping the shutter — only what is inside the frame is read. Each label step takes a quick burst of three photos (the shutter counts 1/3, 2/3, 3/3), so hold still until it finishes; the app combines the three readings so a word one photo misreads is corrected by the others.',
+                      'The camera walks you through the shots one at a time: three for a label check (product name, expiration date, ingredient list), four sides for a box or bottle, front and back for foil. Fit the target inside the on-screen frame before tapping the shutter — only what is inside the frame is read. In Accurate mode each label step takes a quick burst of three photos (the shutter counts 1/3, 2/3, 3/3), so hold still until it finishes; the app combines the three readings so a word one photo misreads is corrected by the others. In Fast mode each step is a single photo, which reads about three times quicker.',
                     ),
                     _Step(
                       number: '4',
                       icon: Icons.fact_check_outlined,
                       title: 'Read the result',
                       description:
-                      'After the last shot the app analyses on its own — no button to press. It shows Compliant, Non-Compliant, or Warning, with the reasons behind the verdict.',
+                      'After the last shot the app analyses on its own — no button to press. It shows Compliant, Non-Compliant, Warned, or (for a damage-only scan) Damaged, with the reasons behind the verdict. The app never says a product is FDA-approved: it checks what is printed on the pack against FDA registry and advisory data, which is not the same thing.',
                     ),
                     _Step(
                       number: '5',
@@ -164,11 +164,11 @@ class HomeScreen extends StatelessWidget {
                     ),
                     _ButtonNote(
                       icon: Icons.report_gmailerrorred_outlined,
-                      title: 'No expiration date / ingredient list on the box',
+                      title: 'No / Unreadable expiration date (or ingredient list)',
                       caption:
                       'Under the step text, on those two steps only. Changes the result.',
                       description:
-                      'Tap this only when the packaging genuinely does not print that element. It skips the shot and records the element as missing, which counts against the product — a missing expiration date or ingredient list makes the scan Non-Compliant. If the text is there but hard to photograph, keep trying instead: move closer, change the frame size, or improve the light.',
+                      'Tap this when the packaging genuinely does not print that element, or prints it in a state nobody can read — rubbed off, smudged, or printed over. It skips the shot and records the element as missing or unreadable, which counts against the product and makes the scan Non-Compliant. If the text is there and legible but simply hard to photograph, keep trying instead: move closer, change the frame size, or improve the light.',
                     ),
                     const SizedBox(height: 24),
 

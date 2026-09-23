@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../models/scan_record.dart';
+import '../services/app_prefs.dart';
 import '../theme/app_colors.dart';
 import '../widgets/capture_tips.dart';
 import '../widgets/theme_toggle_button.dart';
@@ -52,6 +53,11 @@ class PackagingTypeScreen extends StatefulWidget {
 
 class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
   PackagingType? _lastUsed;
+  OcrMode _ocrMode = AppPrefs.instance.ocrMode;
+
+  /// Whether this flow reads a label at all. A damage-only scan runs no OCR,
+  /// so offering a reading mode there would be a control that does nothing.
+  bool get _readsLabel => widget.mode != CameraMode.damage;
 
   @override
   void initState() {
@@ -65,12 +71,21 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
     setState(() => _lastUsed = type);
   }
 
+  void _setOcrMode(OcrMode mode) {
+    setState(() => _ocrMode = mode);
+    AppPrefs.instance.setOcrMode(mode);
+  }
+
   void _openCamera(BuildContext context, PackagingType type) {
 
     _LastPackagingType.write(type);
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => CameraScreen(mode: widget.mode, packagingType: type),
+        builder: (_) => CameraScreen(
+          mode: widget.mode,
+          packagingType: type,
+          ocrMode: _ocrMode,
+        ),
       ),
     );
   }
@@ -136,6 +151,13 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
                 child: Column(
                   children: [
 
+                    if (_readsLabel) ...[
+                      _OcrModePicker(
+                        selected: _ocrMode,
+                        onChanged: _setOcrMode,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     if (_lastUsed != null) ...[
                       const _HintBanner(
                         text: 'The highlighted card is what you checked '
@@ -178,6 +200,136 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
             width: 38,
             height: 38,
             child: Icon(Icons.chevron_left, size: 24, color: AppColors.text),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Lets the user trade reading time for reading accuracy before the camera
+/// opens.
+///
+/// Shown here rather than buried in a settings screen because this is the
+/// last screen before the capture it governs, and the choice is only
+/// meaningful with a specific pack in hand: a crisp carton under good light
+/// reads the same either way, a dot-matrix date on foil does not.
+class _OcrModePicker extends StatelessWidget {
+  final OcrMode selected;
+  final ValueChanged<OcrMode> onChanged;
+
+  const _OcrModePicker({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border, width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.speed, size: 18, color: AppColors.muted),
+              const SizedBox(width: 8),
+              Text(
+                'Reading mode',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              for (final mode in OcrMode.values) ...[
+                Expanded(
+                  child: _ModeChip(
+                    mode: mode,
+                    isSelected: mode == selected,
+                    onTap: () => onChanged(mode),
+                  ),
+                ),
+                if (mode != OcrMode.values.last) const SizedBox(width: 8),
+              ],
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            selected.description,
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.4,
+              color: AppColors.muted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModeChip extends StatelessWidget {
+  final OcrMode mode;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ModeChip({
+    required this.mode,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = AppColors.accent;
+    return Material(
+      color: isSelected ? accent.withValues(alpha: 0.12) : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? accent : AppColors.border,
+              width: isSelected ? 1.4 : 0.8,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                isSelected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                size: 16,
+                color: isSelected ? accent : AppColors.muted,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  mode.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: isSelected ? AppColors.text : AppColors.muted,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -837,7 +837,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                           const Color(0xFF4CAF50)),
                       _statusChip('Non-Compliant', 'NON-COMPLIANT',
                           const Color(0xFFFF9800)),
-                      _statusChip('Warning', ScanRecord.warningLabel,
+                      _statusChip('Warned', ScanRecord.warningLabel,
                           const Color(0xFFF44336)),
                     ],
                   ),
@@ -1239,7 +1239,12 @@ class _RecordCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Two strings, deliberately: [ScanRecord.statusLabel] is the persisted
+    // one the colours and filters key off — including the legacy spellings a
+    // pre-rename record still carries — and [ScanRecord.statusBadge] is what
+    // the user is allowed to read.
     final status = record?.statusLabel ?? '—';
+    final badge = record?.statusBadge ?? '—';
     final keyword = record?.matchedKeyword ?? '—';
     final packagingType = record?.packagingType;
     final visuals = _statusVisuals(status);
@@ -1355,7 +1360,7 @@ class _RecordCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            status,
+                            badge,
                             style: TextStyle(
                               fontSize: 10.5,
                               color: visuals.pillText,

@@ -184,8 +184,18 @@ class CameraScreen extends StatefulWidget {
 
   final PackagingType? packagingType;
 
-  const CameraScreen({super.key, required this.mode, this.packagingType})
-      : assert(
+  /// How many frames each label slot is photographed with — see [OcrMode].
+  /// Passed in rather than read from [AppPrefs] here so the capture runs in
+  /// the mode the user saw on the screen they came from, even if the
+  /// preference changes underneath.
+  final OcrMode ocrMode;
+
+  const CameraScreen({
+    super.key,
+    required this.mode,
+    this.packagingType,
+    this.ocrMode = OcrMode.accurate,
+  }) : assert(
   mode == CameraMode.label || packagingType != null,
   'packagingType is required for damage and inspection scans',
   );
@@ -277,11 +287,6 @@ class _CameraScreenState extends State<CameraScreen>
     }
     return spec.helper;
   }
-
-  /// What the pack is called on screen: the chosen packaging type, or
-  /// "packaging" for a flow that did not ask.
-  String get _packagingNoun =>
-      widget.packagingType?.label.toLowerCase() ?? 'packaging';
 
   PhotoSlot? get _currentLabelSlot =>
       _isLabelPhase ? _labelSlots[_slotIndex].slot : null;
@@ -553,7 +558,7 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
-  /// Frames taken for every label slot.
+  /// Frames taken for every label slot, from the chosen [OcrMode].
   ///
   /// Which characters survive recognition changes shot to shot as focus, hand
   /// shake and the angle of the light move — a dot-matrix date most of all,
@@ -564,8 +569,11 @@ class _CameraScreenState extends State<CameraScreen>
   /// expiry additionally votes on the parsed date itself.
   ///
   /// Three is the smallest number with a strict majority. More frames cost a
-  /// full recognition pass each for diminishing returns.
-  static const int kLabelFrameCount = 3;
+  /// full recognition pass each for diminishing returns — and that cost is
+  /// the whole reason [OcrMode.fast] exists: the repair only has anything to
+  /// repair when the capture is marginal, so on a sharp label the two extra
+  /// frames buy nothing and are paid for three times over in waiting.
+  int get _labelFrameCount => widget.ocrMode.frameCount;
 
   /// Takes one picture and returns the guide-cropped path, or null on failure.
   Future<String?> _captureCrop({required bool cropToGuide}) async {
@@ -627,7 +635,7 @@ class _CameraScreenState extends State<CameraScreen>
       }
 
       final slot = _labelSlots[_slotIndex].slot;
-      const frameCount = kLabelFrameCount;
+      final frameCount = _labelFrameCount;
 
       final paths = <String>[];
       for (var i = 0; i < frameCount; i++) {
@@ -640,7 +648,7 @@ class _CameraScreenState extends State<CameraScreen>
       if (mounted) setState(() => _frameProgress = null);
       if (paths.isEmpty) return;
 
-      // Recognition happens here rather than after all three photos, so the
+      // Recognition happens here rather than after every frame is taken, so the
       // user can be shown what was actually extracted while the pack is still
       // in their hand and a retake costs nothing. The reading is kept and
       // reused by the analysis step.
@@ -2378,8 +2386,8 @@ class _CameraScreenState extends State<CameraScreen>
             Flexible(
               child: Text(
                 _currentLabelSlot == PhotoSlot.expiration
-                    ? 'No expiration date on the $_packagingNoun'
-                    : 'No ingredient list on the $_packagingNoun',
+                    ? 'No / Unreadable expiration date'
+                    : 'No / Unreadable ingredient list',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,

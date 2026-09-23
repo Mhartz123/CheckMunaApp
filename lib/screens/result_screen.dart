@@ -94,7 +94,7 @@ class ResultScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          record.statusLabel,
+                          record.statusBadge,
                           style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,

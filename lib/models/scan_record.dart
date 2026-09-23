@@ -497,20 +497,43 @@ extension ScanRecordUi on ScanRecord {
       case ComplianceStatus.compliant:
         return 'Compliant';
       case ComplianceStatus.nonCompliant:
-        return 'Non-Compliant';
+        return kind == ScanKind.damage ? 'Damaged' : 'Non-Compliant';
       case ComplianceStatus.warning:
-        return 'Warning';
+        return 'Warned';
+    }
+  }
+
+  /// What the UI prints for this record's verdict, in the four words the app
+  /// is allowed to use: Compliant, Non-Compliant, Warned, Damaged.
+  ///
+  /// Kept separate from [statusLabel], which is the string written to disk and
+  /// matched on load — renaming that would strand every saved record.
+  ///
+  /// The app never says the FDA verified, approved or cleared anything. It
+  /// compares what is printed on the pack against the FDA's published registry
+  /// and advisory lists; a pack that matches nothing on those lists has passed
+  /// this app's checks, which is not the FDA passing judgement on the pack in
+  /// the user's hand. "FDA VERIFIED" claimed exactly that, and a user acting
+  /// on it would be acting on an assurance nobody gave.
+  String get statusBadge {
+    switch (status) {
+      case ComplianceStatus.compliant:
+        return 'COMPLIANT';
+      case ComplianceStatus.nonCompliant:
+        return kind == ScanKind.damage ? 'DAMAGED' : 'NON-COMPLIANT';
+      case ComplianceStatus.warning:
+        return 'WARNED';
     }
   }
 
   String get note {
     switch (status) {
       case ComplianceStatus.compliant:
-        return 'Product is compliant with the FDA and is safe to consume. Please refer to instructions / professionals with regards to safe dosage.';
+        return 'This label passed every check the app runs. That is a check of what is printed on the packaging against FDA registry and advisory data — not an FDA endorsement of this pack. Follow the product instructions and ask a pharmacist or physician about safe dosage.';
       case ComplianceStatus.nonCompliant:
-        return 'Product is non-compliant with the FDA and is inadvisable to consume. Please refer to the local FDA hotline near you to report this occurrence.';
+        return 'This label failed one or more of the checks this app runs and the product is inadvisable to consume. Please refer to the local FDA hotline near you to report this occurrence.';
       case ComplianceStatus.warning:
-        return 'This product matched an FDA advisory and needs manual verification before sale or use. Please refer to the local FDA hotline near you to confirm its status.';
+        return 'This product matched an FDA advisory and needs manual checking before sale or use. Please refer to the local FDA hotline near you to confirm its status.';
     }
   }
 

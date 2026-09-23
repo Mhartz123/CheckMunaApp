@@ -20,19 +20,19 @@ class ComplianceLegend extends StatelessWidget {
           color: Color(0xFF4CAF50),
           label: 'Compliant',
           description:
-              'Product is registered and safe to consume. Follow instructions for proper dosage.',
+              'The label passed every check the app runs — it matched no FDA advisory, and the expiration date and ingredient list are present and readable. This is not an FDA endorsement; follow the product instructions for proper dosage.',
         ),
         _LegendItem(
           color: Color(0xFFFF9800),
           label: 'Non-Compliant',
           description:
-              'Product does not meet FDA standards. Inadvisable to consume — report to the local FDA hotline.',
+              'The label failed at least one check — expired, no or unreadable expiration date, no or unreadable ingredient list, or damaged packaging. Inadvisable to consume — report to the local FDA hotline.',
         ),
         _LegendItem(
           color: Color(0xFFE57373),
-          label: 'Warning',
+          label: 'Warned',
           description:
-              'The product matched an FDA advisory. Needs manual verification — confirm its status with the local FDA hotline before sale or use.',
+              'The product matched an FDA advisory. Needs manual checking — confirm its status with the local FDA hotline before sale or use.',
         ),
       ],
     );

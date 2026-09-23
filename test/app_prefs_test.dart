@@ -26,6 +26,33 @@ void main() {
 
   File prefsFile() => File('${tmp.path}/app_prefs.json');
 
+  group('reading mode', () {
+    test('defaults to accurate on a fresh install', () async {
+      await prefs.load();
+      expect(prefs.ocrMode, OcrMode.accurate);
+    });
+
+    test('survives a restart', () async {
+      await prefs.setOcrMode(OcrMode.fast);
+
+      prefs.resetForTest();
+      await prefs.load();
+
+      expect(prefs.ocrMode, OcrMode.fast);
+    });
+
+    test('an unrecognised stored mode falls back to accurate', () async {
+      await prefsFile().writeAsString(jsonEncode({'ocrMode': 'ludicrous'}));
+      await prefs.load();
+      expect(prefs.ocrMode, OcrMode.accurate);
+    });
+
+    test('accurate takes three frames per slot, fast takes one', () {
+      expect(OcrMode.accurate.frameCount, 3);
+      expect(OcrMode.fast.frameCount, 1);
+    });
+  });
+
   test('a fresh install has not onboarded and has not consented', () async {
     await prefs.load();
     expect(prefs.onboardingDone, isFalse);

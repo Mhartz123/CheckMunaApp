@@ -246,17 +246,6 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
     }
   }
 
-  String _badgeText(ScanRecord record) {
-    switch (record.status) {
-      case ComplianceStatus.compliant:
-        return 'FDA VERIFIED';
-      case ComplianceStatus.nonCompliant:
-        return 'NON-COMPLIANT';
-      case ComplianceStatus.warning:
-        return 'FDA ADVISORY';
-    }
-  }
-
   Widget _resultCard(ScanRecord record, String name) {
     return Container(
       width: double.infinity,
@@ -308,7 +297,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
-                    _badgeText(record),
+                    record.statusBadge,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 10,
