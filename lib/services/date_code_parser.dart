@@ -385,6 +385,62 @@ class DateCodeParser {
           'assumed the earliest and latest.';
     }
 
+    // Fill whatever the labels left empty from the unlabelled dates that are
+    // still sitting there unread.
+    //
+    // Every branch above binds a token only to a label it actually found, so a
+    // crop where "MFG" survives and "EXP" is rubbed out leaves the expiry
+    // unclaimed, and [_validate] then throws the whole read away — while the
+    // SAME crop with BOTH labels unreadable parses correctly through the
+    // unlabelled branch above. One readable label was strictly worse than
+    // none, which is backwards: a label that was read is extra information,
+    // and it cannot be allowed to cost us the date printed next to it.
+    //
+    // So the unlabelled heuristic stays available for the roles the labels did
+    // not fill, and the read is marked ambiguous — the date is good enough to
+    // act on, but the user is asked to check it against the pack, because
+    // which value is the expiry was inferred rather than read.
+    if (manufacturedToken == null || expiryToken == null) {
+      final unclaimed = <_DateToken>[
+        for (final token in tokens)
+          if (!identical(token, manufacturedToken) &&
+              !identical(token, expiryToken))
+            token,
+      ]..sort((a, b) => a.asExpiry.compareTo(b.asExpiry));
+
+      if (expiryToken == null && unclaimed.isNotEmpty) {
+        // The latest date on a code is the expiry: manufacture and packing
+        // dates precede it by definition, so "latest" is not a guess about
+        // which value is which, only about which label was meant.
+        expiryToken = unclaimed.removeLast();
+        status = DateCodeStatus.ambiguous;
+        note = _appendNote(
+            note,
+            'The expiry label could not be read; the latest unlabelled date '
+            'on the code was taken as the expiry.');
+      }
+
+      // The manufacture date is adopted only if the pair it would form is
+      // plausible. An unlabelled value that fails the shelf-life cross-check
+      // is not a manufacture date at all — it is a lot number that parsed as
+      // one — and adopting it would hand [_validate] a contradiction that
+      // costs us the expiry we just recovered.
+      if (manufacturedToken == null &&
+          expiryToken != null &&
+          unclaimed.isNotEmpty) {
+        final candidate = unclaimed.first;
+        if (_pairProblem(candidate.asManufactured, expiryToken.asExpiry) ==
+            null) {
+          manufacturedToken = candidate;
+          status = DateCodeStatus.ambiguous;
+          note = _appendNote(
+              note,
+              'The manufacture label could not be read; the earliest '
+              'unlabelled date was taken as the manufacture date.');
+        }
+      }
+    }
+
     // A day/month pair that the printed code itself does not disambiguate is
     // a real uncertainty about the date, not a detail of how it was matched,
     // so it has to reach the compliance engine as one.
@@ -411,6 +467,10 @@ class DateCodeParser {
     );
   }
 
+  /// Joins a second sentence onto a note that may not exist yet.
+  static String _appendNote(String? note, String addition) =>
+      note == null ? addition : '$note $addition';
+
   // ── Structural validation ────────────────────────────────────────────────
 
   /// Cross-checks the pair and fails loudly. A misread digit usually breaks
@@ -433,7 +493,17 @@ class DateCodeParser {
     // An unreadable DATE does not invalidate the registration number, which
     // was read off its own label and validated on its own terms — so it
     // survives here alongside the batch code.
+    //
+    // The manufacture date survives too. It is read off its own label and is
+    // not what the checks below are about: a code whose expiry reads twenty
+    // years out has a misread expiry, and discarding the manufacture date
+    // alongside it threw away the one value the crop DID yield — off the
+    // report, off the confirmation sheet, and out of the evidence a user is
+    // shown when asked to retake. Nothing can mistake this for a usable
+    // reading: [expiry] is null and [status] is unreadable, which is what
+    // every consumer gates on.
     DateCode unreadable(String why) => DateCode(
+          manufactured: manufactured,
           batch: batch,
           fdaRegistration: fdaRegistration,
           status: DateCodeStatus.unreadable,
@@ -468,18 +538,8 @@ class DateCodeParser {
     }
 
     if (manufactured != null) {
-      if (!expiry.isAfter(manufactured)) {
-        return unreadable(
-            'Expiry date is not after the manufacture date, so the two were '
-            'misread or swapped.');
-      }
-      final months = (expiry.year * 12 + expiry.month) -
-          (manufactured.year * 12 + manufactured.month);
-      if (months < kMinShelfLifeMonths || months > kMaxShelfLifeMonths) {
-        return unreadable('Gap of $months months between manufacture and '
-            'expiry is outside the plausible $kMinShelfLifeMonths-'
-            '$kMaxShelfLifeMonths month shelf life.');
-      }
+      final problem = _pairProblem(manufactured, expiry);
+      if (problem != null) return unreadable(problem);
     }
 
     return DateCode(
@@ -493,6 +553,28 @@ class DateCodeParser {
       sourceText: sourceText,
       confidence: confidence,
     );
+  }
+
+  /// What is wrong with a manufacture/expiry pair, or null if nothing is.
+  ///
+  /// Shared by [_validate], which fails the read over it, and by the recovery
+  /// step in [parseLines], which uses it the other way round — to decide
+  /// whether an unlabelled value is a manufacture date at all before adopting
+  /// it as one. Both are asking the same question of the same pair, so they
+  /// ask it in the same place.
+  static String? _pairProblem(DateTime manufactured, DateTime expiry) {
+    if (!expiry.isAfter(manufactured)) {
+      return 'Expiry date is not after the manufacture date, so the two were '
+          'misread or swapped.';
+    }
+    final months = (expiry.year * 12 + expiry.month) -
+        (manufactured.year * 12 + manufactured.month);
+    if (months < kMinShelfLifeMonths || months > kMaxShelfLifeMonths) {
+      return 'Gap of $months months between manufacture and expiry is outside '
+          'the plausible $kMinShelfLifeMonths-$kMaxShelfLifeMonths month '
+          'shelf life.';
+    }
+    return null;
   }
 
   // ── Line scanning ────────────────────────────────────────────────────────

@@ -852,6 +852,19 @@ class _CameraScreenState extends State<CameraScreen>
         hint = 'Only ${vote.agreeing} of ${vote.total} shots read this the same '
             '— worth retaking';
       }
+      // An ambiguous code is one the parser had to make a call on — an
+      // unreadable EXP label, a day/month pair that could be either way round.
+      // [DateCodeParser] justifies reading it at all on the grounds that the
+      // user is asked to check it, so the reason has to actually reach them.
+      // Shown only when nothing more urgent has been said, since blur and
+      // frame disagreement are both reasons to retake rather than to verify.
+      final code = read.dateCode;
+      if (hint == null &&
+          code != null &&
+          code.status == DateCodeStatus.ambiguous &&
+          code.note != null) {
+        hint = '${code.note} Check it matches the pack.';
+      }
     } else if (vote.isMultiFrame && fusion != null) {
       if (fusion.framesAgreeing < 2) {
         hint = 'The ${vote.total} shots read this quite differently '
@@ -1255,7 +1268,15 @@ class _CameraScreenState extends State<CameraScreen>
       case PhotoSlot.expiration:
         final code = read.dateCode;
         if (code == null || code.expiry == null) {
-          return 'No expiry date found';
+          // A manufacture date read off a crop whose expiry could not be read
+          // is still worth showing: it tells the user the crop was framed on
+          // the right part of the pack and that it is the expiry line
+          // specifically that needs another try.
+          final madeOnly = code?.manufactured;
+          return madeOnly == null
+              ? 'No expiry date found'
+              : 'No expiry date found  ·  '
+                  'Made: ${_formatMonthDay(madeOnly, null)}';
         }
         final expiry = _formatMonthDay(code.expiry!, code.matchedFormat);
         final made = code.manufactured;

@@ -113,8 +113,20 @@ void main() {
 
       expect(code.status, DateCodeStatus.unreadable);
       expect(code.expiry, isNull);
-      expect(code.manufactured, isNull);
       expect(code.note, contains('not after'));
+      // The manufacture date is kept as evidence of what the crop did yield.
+      // Nothing can mistake the read for a usable one — the expiry is null and
+      // the status is unreadable, which is what every consumer gates on.
+      expect(code.manufactured, isNotNull);
+    });
+
+    test('a failed read still reports the manufacture date it managed', () {
+      final code = _parse(_stacked(<String>['MFG 04/2026', 'EXP 04/2044']));
+
+      expect(code.status, DateCodeStatus.unreadable);
+      expect(code.expiry, isNull);
+      expect(code.manufactured!.year, 2026);
+      expect(code.manufactured!.month, 4);
     });
 
     test('rejects a shelf life under six months', () {
@@ -153,6 +165,99 @@ void main() {
       expect(code.expiry, isNull);
       expect(code.manufactured, isNull);
       expect(code.note, isNotNull);
+    });
+  });
+
+  /// A label that was read is extra information. It must never cost the read
+  /// the date printed beside it — which is exactly what used to happen: a crop
+  /// whose MFG label survived and whose EXP label did not was thrown away,
+  /// while the same crop with BOTH labels unreadable parsed correctly.
+  group('partially readable labels', () {
+    // Traced off a bottle whose EXP label is crossed by a glare streak:
+    //   LOT NO:DWHT040426 / MFG :APR 2026 / E?? :APR 2028
+    List<String> glaredBottle(String expLabel) => <String>[
+          'LOT NO:DWHT040426',
+          'MFG    :APR  2026',
+          '$expLabel    :APR  2028',
+        ];
+
+    test('the expiry is recovered when only the EXP label is unreadable', () {
+      final code = _parse(_stacked(glaredBottle('E:>')));
+
+      expect(code.expiry!.year, 2028);
+      expect(code.expiry!.month, 4);
+      expect(code.manufactured!.year, 2026);
+      // Which value was the expiry was inferred, not read, so the user is
+      // asked to check it rather than being given it silently.
+      expect(code.status, DateCodeStatus.ambiguous);
+      expect(code.note, contains('expiry label could not be read'));
+      expect(code.batch, 'DWHT040426');
+    });
+
+    test('one readable label is never worse than none', () {
+      final oneLabel = _parse(_stacked(glaredBottle('E:>')));
+      final noLabels = _parse(_stacked(<String>[
+        'LOT NO:DWHT040426',
+        'M=G    :APR  2026',
+        'E:>    :APR  2028',
+      ]));
+
+      expect(noLabels.expiry, isNotNull);
+      expect(oneLabel.expiry, noLabels.expiry);
+      expect(oneLabel.manufactured, noLabels.manufactured);
+    });
+
+    test('the manufacture date is recovered when its label is unreadable', () {
+      final code = _parse(_stacked(<String>[
+        'LOT NO:DWHT040426',
+        'M=G    :APR  2026',
+        'EXP    :APR  2028',
+      ]));
+
+      expect(code.expiry!.year, 2028);
+      expect(code.manufactured!.year, 2026);
+      expect(code.status, DateCodeStatus.ambiguous);
+      expect(code.note, contains('manufacture label could not be read'));
+    });
+
+    test('an unlabelled date that cannot be a manufacture date is not adopted',
+        () {
+      // Three months before the expiry is under the shelf-life floor, so this
+      // is a lot number that parsed as a date, not a manufacture date.
+      final code = _parse(_stacked(<String>[
+        'EXP    :APR  2028',
+        'XX     :JAN  2028',
+      ]));
+
+      expect(code.expiry!.year, 2028);
+      expect(code.expiry!.month, 4);
+      expect(code.manufactured, isNull);
+      // Adopting it would have handed the cross-check a contradiction and
+      // cost us the expiry that was read off its own label.
+      expect(code.note, isNot(contains('manufacture label')));
+    });
+
+    test('an unlabelled date after the expiry is not adopted either', () {
+      final code = _parse(_stacked(<String>[
+        'EXP    :APR  2028',
+        'XX     :APR  2030',
+      ]));
+
+      expect(code.expiry!.year, 2028);
+      expect(code.manufactured, isNull);
+    });
+
+    test('a pack with only a manufacture date still fails, with the date kept',
+        () {
+      final code = _parse(_stacked(<String>[
+        'LOT NO:DWHT040426',
+        'MFG    :APR  2026',
+      ]));
+
+      expect(code.status, DateCodeStatus.unreadable);
+      expect(code.expiry, isNull);
+      expect(code.manufactured!.year, 2026);
+      expect(code.note, contains('no expiry date was found'));
     });
   });
 
