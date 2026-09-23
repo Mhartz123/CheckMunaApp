@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../models/scan_record.dart';
 import '../services/app_prefs.dart';
+import '../services/theme_controller.dart';
 import '../theme/app_colors.dart';
 import '../widgets/capture_tips.dart';
 import '../widgets/theme_toggle_button.dart';
@@ -76,15 +77,93 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
     AppPrefs.instance.setOcrMode(mode);
   }
 
-  void _openCamera(BuildContext context, PackagingType type) {
+  /// Box, for a flow that runs the damage check, needs one more answer: a
+  /// carton's "side" is a square panel on one shape and a narrow strip on
+  /// another, so the capture steps can't word themselves until the shape is
+  /// known. Every other path goes straight to the camera.
+  Future<void> _openCamera(BuildContext context, PackagingType type) async {
+    BoxForm? form;
+    if (type == PackagingType.box && widget.mode != CameraMode.label) {
+      form = await _askBoxForm(context);
+      // Dismissed without choosing — stay on the picker rather than
+      // guessing a shape.
+      if (form == null) return;
+    }
 
     _LastPackagingType.write(type);
+    if (!context.mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CameraScreen(
           mode: widget.mode,
           packagingType: type,
+          boxForm: form,
           ocrMode: _ocrMode,
+        ),
+      ),
+    );
+  }
+
+  /// The box-shape prompt. Returns null if the sheet is dismissed.
+  Future<BoxForm?> _askBoxForm(BuildContext context) {
+    return showModalBottomSheet<BoxForm>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      // Four options plus the heading run past the default 9/16-of-screen
+      // cap on a short phone, which would clip the last shape.
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'What shape is the box?',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.text,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'This only changes what you are asked to frame on the two '
+                    'side shots.',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.4,
+                  color: AppColors.muted,
+                ),
+              ),
+              const SizedBox(height: 16),
+              for (final form in BoxForm.values) ...[
+                _BoxFormOption(
+                  form: form,
+                  onTap: () => Navigator.of(sheetContext).pop(form),
+                ),
+                if (form != BoxForm.values.last) const SizedBox(height: 10),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -103,6 +182,19 @@ class _PackagingTypeScreenState extends State<PackagingTypeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Pushed route: listen to the theme controller directly, the same way
+    // ResultScreen and RecordDetailScreen do. main.dart's root listener
+    // rebuilds MaterialApp, but the Navigator hands an already-built widget
+    // back for each route below the top, so this screen kept painting its
+    // old palette until it was popped — which is why the toggle in its own
+    // app bar appeared to do nothing until you got back to the Homepage.
+    return ListenableBuilder(
+      listenable: ThemeController.instance,
+      builder: (context, _) => _build(context),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
@@ -329,6 +421,92 @@ class _ModeChip extends StatelessWidget {
                   ),
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One row of the box-shape prompt: a drawn front panel and side panel at
+/// the shape's real proportions, then the name and the tell-them-apart line.
+/// The diagram carries the meaning here — "rectangular" and "rectangular,
+/// square sides" read almost identically as words.
+class _BoxFormOption extends StatelessWidget {
+  final BoxForm form;
+  final VoidCallback onTap;
+
+  const _BoxFormOption({required this.form, required this.onTap});
+
+  /// One outlined panel of the carton, drawn at [aspect] (width / height).
+  Widget _panel(double aspect) {
+    const height = 34.0;
+    return Container(
+      width: (height * aspect).clamp(9.0, 56.0),
+      height: height,
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.text, width: 1.6),
+        borderRadius: BorderRadius.circular(3),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border, width: 0.8),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 96,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _panel(form.frontAspect),
+                    const SizedBox(width: 7),
+                    _panel(form.sideAspect),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      form.label,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      form.description,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        height: 1.35,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
             ],
           ),
         ),
