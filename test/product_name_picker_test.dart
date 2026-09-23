@@ -195,6 +195,75 @@ void main() {
       final ordered = ProductNamePicker.orderForName(pearlSkinPanel());
       expect(ordered.map((l) => l.text), isNot(contains('plus')));
     });
+
+    test('the logo is kept as the brand in front of the name', () {
+      final reading = ProductNamePicker.read(pearlSkinPanel());
+      expect(reading.brand.map((l) => l.text), ['daily', 'plus']);
+      expect(reading.display, 'daily plus PearlSkin White Tomato');
+    });
+
+    // Proportions of the real capture, where the logo is set far larger than
+    // the name. The word and adjacency bonuses alone left "daily" ahead here.
+    List<TextLine> pearlSkinCapture() => <TextLine>[
+          _line('daily', left: 140, top: 20, width: 110, height: 48),
+          _line('plus', left: 150, top: 68, width: 95, height: 50),
+          _line('PearlSkin White Tomato',
+              left: 30, top: 150, width: 340, height: 30),
+          _line('Whitening Supplement',
+              left: 90, top: 192, width: 220, height: 20),
+        ];
+
+    test('picks the product name when the logo dwarfs it', () {
+      expect(_pick(pearlSkinCapture()), 'PearlSkin White Tomato');
+      expect(ProductNamePicker.read(pearlSkinCapture()).display,
+          'daily plus PearlSkin White Tomato');
+    });
+
+    test('arrival order does not break up the logo', () {
+      expect(ProductNamePicker.read(pearlSkinCapture().reversed.toList()).display,
+          'daily plus PearlSkin White Tomato');
+    });
+
+    test('a stacked one-word name with nothing else is the name', () {
+      final lines = <TextLine>[
+        _line('Bio', left: 0, top: 0, width: 200, height: 80),
+        _line('Flu', left: 0, top: 90, width: 200, height: 80),
+        _line('500 mg Tablet', left: 0, top: 200, width: 300, height: 30),
+      ];
+      final reading = ProductNamePicker.read(lines);
+      expect(reading.brand, isEmpty);
+      expect(reading.display, 'Bio Flu');
+    });
+
+    test('generic words set one per line are not a logo', () {
+      final lines = <TextLine>[
+        _line('Paracetamol', left: 0, top: 0, width: 600, height: 100),
+        _line('Caffeine', left: 0, top: 110, width: 500, height: 100),
+        _line('Medicol', left: 0, top: 300, width: 500, height: 80),
+      ];
+      final reading = ProductNamePicker.read(lines);
+      expect(reading.brand, isEmpty);
+      expect(reading.display, 'Medicol');
+    });
+  });
+
+  group('panels with no logo read as before', () {
+    test('Kremil-S display is the brand line alone', () {
+      final lines = <TextLine>[
+        _line('Magnesium Hydroxide',
+            left: 0, top: 120, width: 2000, height: 150),
+        _line('Kremil - S ®',
+            left: 590,
+            top: 530,
+            width: 870,
+            height: 100,
+            heights: const {'-': 20, '®': 35}),
+        _line('ANTACID', left: 1320, top: 755, width: 270, height: 55),
+      ];
+      final reading = ProductNamePicker.read(lines);
+      expect(reading.brand, isEmpty);
+      expect(reading.display, 'Kremil - S ®');
+    });
   });
 
   group('word classification', () {
