@@ -27,18 +27,18 @@ enum CameraMode { label, damage, inspection }
 /// One capture read twice: as photographed, and after enhancement, alongside
 /// the quality measurement taken while enhancing it.
 typedef _DualRead = ({
-  RecognizedText? original,
-  RecognizedText? enhanced,
-  CaptureQuality? quality,
+RecognizedText? original,
+RecognizedText? enhanced,
+CaptureQuality? quality,
 
-  /// Time spent in OcrPreprocessor (decode, quality assessment, enhancement,
-  /// temp-JPEG write) for this capture.
-  double preprocessMs,
+/// Time spent in OcrPreprocessor (decode, quality assessment, enhancement,
+/// temp-JPEG write) for this capture.
+double preprocessMs,
 
-  /// Time spent inside ML Kit across [recognizeRuns] recognitions — two when
-  /// the enhanced path produced a file, one when preprocessing failed.
-  double recognizeMs,
-  int recognizeRuns,
+/// Time spent inside ML Kit across [recognizeRuns] recognitions — two when
+/// the enhanced path produced a file, one when preprocessing failed.
+double recognizeMs,
+int recognizeRuns,
 });
 
 /// What one label slot's capture turned into: the winning reading, the date it
@@ -184,6 +184,11 @@ class CameraScreen extends StatefulWidget {
 
   final PackagingType? packagingType;
 
+  /// Which carton shape a [PackagingType.box] scan is photographing, picked
+  /// on PackagingTypeScreen. Null for every other packaging type, and for a
+  /// label-only scan, where no packaging shot is taken at all.
+  final BoxForm? boxForm;
+
   /// How many frames each label slot is photographed with — see [OcrMode].
   /// Passed in rather than read from [AppPrefs] here so the capture runs in
   /// the mode the user saw on the screen they came from, even if the
@@ -194,6 +199,7 @@ class CameraScreen extends StatefulWidget {
     super.key,
     required this.mode,
     this.packagingType,
+    this.boxForm,
     this.ocrMode = OcrMode.accurate,
   }) : assert(
   mode == CameraMode.label || packagingType != null,
@@ -253,12 +259,18 @@ class _CameraScreenState extends State<CameraScreen>
     final type = widget.packagingType ?? PackagingType.box;
     final typeLabel = type.label;
     final lower = typeLabel.toLowerCase();
+    // A carton's "side" is a square panel on one shape and a narrow strip on
+    // another, so the two side steps name the shape the user chose. Without
+    // a shape (foil, bottle, or a record from before the prompt existed) the
+    // wording falls back to the plain "side".
+    final sideNoun = widget.boxForm?.sidePanelNoun ?? 'side';
     String helperFor(BoxSlot slot) => switch (slot) {
-          BoxSlot.front => 'Fit the whole front of the $lower inside the guide',
-          BoxSlot.side1 => 'Fit one side of the $lower inside the guide',
-          BoxSlot.side2 => 'Fit the other side of the $lower inside the guide',
-          BoxSlot.back => 'Fit the whole back of the $lower inside the guide',
-        };
+      BoxSlot.front => 'Fit the whole front of the $lower inside the guide',
+      BoxSlot.side1 => 'Fit one $sideNoun of the $lower inside the guide',
+      BoxSlot.side2 =>
+      'Fit the other $sideNoun of the $lower inside the guide',
+      BoxSlot.back => 'Fit the whole back of the $lower inside the guide',
+    };
     return [
       for (final slot in type.captureSlots)
         (
@@ -342,11 +354,51 @@ class _CameraScreenState extends State<CameraScreen>
 
   Size get _guideSize {
     if (!_isLabelPhase) {
+      final aspect = _damageGuideAspect;
+      if (aspect != null) return _damageGuideFor(aspect);
       return _isLandscape ? _damageGuideSizeLandscape : _damageGuideSize;
     }
     return _currentLabelSlot == PhotoSlot.expiration
         ? _expirationGuideSize
         : _guidePresets[_guidePresetIndex].size;
+  }
+
+  /// Width/height the guide should take for the packaging shot being framed,
+  /// or null when the shape is unknown — foil, bottle, and box scans saved
+  /// before the shape prompt existed, which keep the square-ish default.
+  ///
+  /// The box shots are cropped to this rect (see [_takePhoto]), so the guide
+  /// is not decoration: a cube's square side and a slim carton's narrow side
+  /// hand the detector very different images, and framing either one inside
+  /// the same box-shaped guide drags in the desk behind it.
+  double? get _damageGuideAspect {
+    final form = widget.boxForm;
+    if (form == null || widget.packagingType != PackagingType.box) return null;
+    return switch (_boxSlots[_slotIndex].slot) {
+      BoxSlot.front || BoxSlot.back => form.frontAspect,
+      BoxSlot.side1 || BoxSlot.side2 => form.sideAspect,
+    };
+  }
+
+  /// The largest rectangle of [aspect] that fits the free band, so a wide
+  /// front panel and a narrow side panel both land as big as the screen
+  /// allows instead of being scaled off one shared dimension.
+  Size _damageGuideFor(double aspect) {
+    final band = _isLandscape ? _landscapeGuideBand : _portraitGuideBand;
+    final maxWidth = (band.width - 32).clamp(120.0, _isLandscape ? 460.0 : 340.0);
+    // The portrait ceiling is set by the tallest shape — an upright carton,
+    // which is height-bound rather than width-bound. Everything wider hits
+    // maxWidth first and never reaches it.
+    final maxHeight =
+    (band.height - 24).clamp(120.0, _isLandscape ? 300.0 : 470.0);
+
+    var width = maxWidth;
+    var height = width / aspect;
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * aspect;
+    }
+    return Size(width, height);
   }
 
   bool get _isLandscape => _previewSize.width > _previewSize.height;
@@ -433,7 +485,7 @@ class _CameraScreenState extends State<CameraScreen>
     // pay to load a damage model it will never run.
     ComplianceEngine.warmUp(
       packagingType:
-          widget.mode == CameraMode.label ? null : widget.packagingType,
+      widget.mode == CameraMode.label ? null : widget.packagingType,
     );
 
     _applyCameraOrientations();
@@ -893,136 +945,136 @@ class _CameraScreenState extends State<CameraScreen>
       ),
       builder: (sheetContext) => SafeArea(
         child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.border,
-                  borderRadius: BorderRadius.circular(2),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Flexible(
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(path),
-                height: 120,
-                width: double.infinity,
-                fit: BoxFit.cover,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              !vote.isMultiFrame
-                  ? (slot == PhotoSlot.expiration ? 'Date read' : 'Text read')
-                  : slot == PhotoSlot.expiration && !vote.fused
-                      ? 'Date read  ·  ${vote.agreeing}/${vote.total} shots agree'
-                      : '${slot == PhotoSlot.expiration ? 'Date' : 'Text'} read  ·  '
-                          'combined from ${vote.total} shots',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.6,
-                color: AppColors.muted,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              summary,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: good ? AppColors.text : const Color(0xFFE57373),
-              ),
-            ),
-            if (note != null) ...[
-              const SizedBox(height: 10),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.auto_fix_high, size: 16, color: AppColors.accent),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      note,
-                      style: TextStyle(fontSize: 13, color: AppColors.accent),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-            if (hint != null) ...[
-              const SizedBox(height: 10),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.info_outline,
-                      size: 16, color: Color(0xFFE0A030)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      hint,
-                      style: const TextStyle(
-                          fontSize: 13, color: Color(0xFFE0A030)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(sheetContext).pop(false),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      side: BorderSide(color: AppColors.border),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: Text('Retake',
+              const SizedBox(height: 16),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(
+                          File(path),
+                          height: 120,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        !vote.isMultiFrame
+                            ? (slot == PhotoSlot.expiration ? 'Date read' : 'Text read')
+                            : slot == PhotoSlot.expiration && !vote.fused
+                            ? 'Date read  ·  ${vote.agreeing}/${vote.total} shots agree'
+                            : '${slot == PhotoSlot.expiration ? 'Date' : 'Text'} read  ·  '
+                            'combined from ${vote.total} shots',
                         style: TextStyle(
-                            color: AppColors.text,
-                            fontWeight: FontWeight.w600)),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.6,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        summary,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: good ? AppColors.text : const Color(0xFFE57373),
+                        ),
+                      ),
+                      if (note != null) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.auto_fix_high, size: 16, color: AppColors.accent),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                note,
+                                style: TextStyle(fontSize: 13, color: AppColors.accent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (hint != null) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.info_outline,
+                                size: 16, color: Color(0xFFE0A030)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                hint,
+                                style: const TextStyle(
+                                    fontSize: 13, color: Color(0xFFE0A030)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: () => Navigator.of(sheetContext).pop(true),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(false),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: BorderSide(color: AppColors.border),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text('Retake',
+                          style: TextStyle(
+                              color: AppColors.text,
+                              fontWeight: FontWeight.w600)),
                     ),
-                    child: const Text('Use this',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
-                ),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(true),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Use this',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-      ),
       ),
     );
     return accepted ?? false;
@@ -1030,12 +1082,12 @@ class _CameraScreenState extends State<CameraScreen>
 
   /// Whether [read] looks like a usable result, for colouring the summary.
   bool _isGoodRead(PhotoSlot slot, _SlotRead read) => switch (slot) {
-        PhotoSlot.expiration => read.dateCode?.expiry != null,
-        PhotoSlot.front => _readingScore(read.text) >= kMinReadingScore,
-        PhotoSlot.ingredients =>
-          (read.text?.text ?? '').replaceAll(RegExp(r'[^A-Za-z]'), '').length >=
-              8,
-      };
+    PhotoSlot.expiration => read.dateCode?.expiry != null,
+    PhotoSlot.front => _readingScore(read.text) >= kMinReadingScore,
+    PhotoSlot.ingredients =>
+    (read.text?.text ?? '').replaceAll(RegExp(r'[^A-Za-z]'), '').length >=
+        8,
+  };
 
   /// Minimum confidence-weighted character count below which a front or
   /// ingredients capture is considered to have read nothing worth keeping, and
@@ -1105,8 +1157,8 @@ class _CameraScreenState extends State<CameraScreen>
         r.quality == null
             ? 0.8
             : r.quality!.passes
-                ? 1.0
-                : 0.6,
+            ? 1.0
+            : 0.6,
     ];
     final fuseWatch = Stopwatch()..start();
     final fusion = OcrFusion.fuse(
@@ -1195,7 +1247,7 @@ class _CameraScreenState extends State<CameraScreen>
       final code = DateCodeParser.parse(
         fusion.text,
         maxSkewDegrees:
-            OcrGeometry.maxSkewDegreesFor(_profileFor(PhotoSlot.expiration)),
+        OcrGeometry.maxSkewDegreesFor(_profileFor(PhotoSlot.expiration)),
       );
       final fusedRead = _SlotRead(text: fusion.text, dateCode: code);
       final fusedKey = _voteKey(slot, fusedRead);
@@ -1276,7 +1328,7 @@ class _CameraScreenState extends State<CameraScreen>
           return madeOnly == null
               ? 'No expiry date found'
               : 'No expiry date found  ·  '
-                  'Made: ${_formatMonthDay(madeOnly, null)}';
+              'Made: ${_formatMonthDay(madeOnly, null)}';
         }
         final expiry = _formatMonthDay(code.expiry!, code.matchedFormat);
         final made = code.manufactured;
@@ -1369,12 +1421,12 @@ class _CameraScreenState extends State<CameraScreen>
           : await _recognizeFile(recognizer, enhancedPath);
       recognizeWatch.stop();
       return (
-        original: original,
-        enhanced: enhanced,
-        quality: quality,
-        preprocessMs: preWatch.elapsedMicroseconds / 1000.0,
-        recognizeMs: recognizeWatch.elapsedMicroseconds / 1000.0,
-        recognizeRuns: enhancedPath == null ? 1 : 2,
+      original: original,
+      enhanced: enhanced,
+      quality: quality,
+      preprocessMs: preWatch.elapsedMicroseconds / 1000.0,
+      recognizeMs: recognizeWatch.elapsedMicroseconds / 1000.0,
+      recognizeRuns: enhancedPath == null ? 1 : 2,
       );
     } finally {
       if (enhancedPath != null) {
@@ -1849,104 +1901,104 @@ class _CameraScreenState extends State<CameraScreen>
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: AppColors.accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(Icons.save_outlined,
-                            color: AppColors.accent, size: 20),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('Save record',
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.text,
-                                )),
-                            const SizedBox(height: 2),
-                            Text('Name this scan to file it in Records',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: AppColors.muted,
-                                )),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-
-                  Text('RECORD NAME',
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.8,
-                        color: AppColors.muted,
-                      )),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: nameController,
-                    autofocus: true,
-                    onChanged: onChanged,
-                    style: TextStyle(fontSize: 15, color: AppColors.text),
-                    decoration: InputDecoration(
-                      hintText: 'Loaf_of_bread',
-                      hintStyle: TextStyle(
-                          color: AppColors.muted.withValues(alpha: 0.7)),
-                      filled: true,
-                      fillColor: AppColors.bg,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 14),
-                      enabledBorder: border(fieldBorder, 1),
-                      focusedBorder: border(fieldFocus, 1.8),
-                      errorText: isTaken
-                          ? 'This name is already taken. Please choose another.'
-                          : null,
-                      errorStyle: const TextStyle(
-                          color: Color(0xFFE57373), fontSize: 11),
-                      errorBorder: border(const Color(0xFFE57373), 1),
-                      focusedErrorBorder:
-                      border(const Color(0xFFE57373), 1.8),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline,
-                          size: 14, color: AppColors.muted),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Once saved, this name can\'t be changed. Use '
-                              'letters, numbers, and underscores.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            height: 1.4,
-                            color: AppColors.muted,
+                          Row(
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: AppColors.accent.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(Icons.save_outlined,
+                                    color: AppColors.accent, size: 20),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text('Save record',
+                                        style: TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.text,
+                                        )),
+                                    const SizedBox(height: 2),
+                                    Text('Name this scan to file it in Records',
+                                        style: TextStyle(
+                                          fontSize: 12.5,
+                                          color: AppColors.muted,
+                                        )),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  _ShareScanNotice(
-                    sharingOn: sharingOn,
-                    shareThisScan: shareThisScan,
-                    onChanged: (v) => setSheetState(() => shareThisScan = v),
-                  ),
+                          const SizedBox(height: 18),
+
+                          Text('RECORD NAME',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.8,
+                                color: AppColors.muted,
+                              )),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: nameController,
+                            autofocus: true,
+                            onChanged: onChanged,
+                            style: TextStyle(fontSize: 15, color: AppColors.text),
+                            decoration: InputDecoration(
+                              hintText: 'Loaf_of_bread',
+                              hintStyle: TextStyle(
+                                  color: AppColors.muted.withValues(alpha: 0.7)),
+                              filled: true,
+                              fillColor: AppColors.bg,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 14),
+                              enabledBorder: border(fieldBorder, 1),
+                              focusedBorder: border(fieldFocus, 1.8),
+                              errorText: isTaken
+                                  ? 'This name is already taken. Please choose another.'
+                                  : null,
+                              errorStyle: const TextStyle(
+                                  color: Color(0xFFE57373), fontSize: 11),
+                              errorBorder: border(const Color(0xFFE57373), 1),
+                              focusedErrorBorder:
+                              border(const Color(0xFFE57373), 1.8),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.info_outline,
+                                  size: 14, color: AppColors.muted),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Once saved, this name can\'t be changed. Use '
+                                      'letters, numbers, and underscores.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.4,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          _ShareScanNotice(
+                            sharingOn: sharingOn,
+                            shareThisScan: shareThisScan,
+                            onChanged: (v) => setSheetState(() => shareThisScan = v),
+                          ),
                         ],
                       ),
                     ),
@@ -3117,7 +3169,7 @@ class _ShareScanNotice extends StatelessWidget {
           Expanded(
             child: Text(
               'Data sharing is off, so this scan stays on this device only. '
-              'You can change this from the cloud (data sharing) button on Home.',
+                  'You can change this from the cloud (data sharing) button on Home.',
               style: TextStyle(
                   fontSize: 12, height: 1.4, color: AppColors.muted),
             ),
@@ -3165,8 +3217,8 @@ class _ShareScanNotice extends StatelessWidget {
             child: Text(
               shareThisScan
                   ? 'The photos and result will be uploaded and viewed by FDA '
-                      'monitors. Turn this off if this is your own or an '
-                      'unreleased product.'
+                  'monitors. Turn this off if this is your own or an '
+                  'unreleased product.'
                   : 'This scan will be saved on this device only.',
               style: TextStyle(
                 fontSize: 12,

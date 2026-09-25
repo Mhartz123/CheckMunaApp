@@ -117,6 +117,89 @@ extension PhotoSlotX on PhotoSlot {
   }
 }
 
+/// Which shape of carton a [PackagingType.box] scan is photographing, asked
+/// for right after Box is chosen (see PackagingTypeScreen).
+///
+/// The capture flow is the same four shots either way — what changes is what
+/// the user is told to frame on the two side shots, since "the side" means a
+/// square panel on one shape and a narrow strip on another. Keeping it as an
+/// enum rather than a free-text note also leaves a place for a shape-specific
+/// damage model to hook in later without another round of UI.
+enum BoxForm { cube, rectangular, squareSided, upright }
+
+extension BoxFormX on BoxForm {
+  String get label {
+    switch (this) {
+      case BoxForm.cube:
+        return 'Cube';
+      case BoxForm.rectangular:
+        return 'Rectangular';
+      case BoxForm.squareSided:
+        return 'Rectangular, square sides';
+      case BoxForm.upright:
+        return 'Upright, square base';
+    }
+  }
+
+  /// What the user should look at to tell the three apart — phrased around
+  /// the carton in their hand, not around the geometry.
+  String get description {
+    switch (this) {
+      case BoxForm.cube:
+        return 'Every face is a square — the box is as deep as it is wide '
+            'and tall.';
+      case BoxForm.rectangular:
+        return 'Front and back are rectangles, and the sides are narrow '
+            'rectangles too.';
+      case BoxForm.squareSided:
+        return 'Front and back are rectangles, but each side is a square.';
+      case BoxForm.upright:
+        return 'Every side is the same upright rectangle — square from '
+            'above, and taller than it is wide.';
+    }
+  }
+
+  /// Width/height of the front panel and of a side panel, used to draw the
+  /// little shape diagram next to each option.
+  double get frontAspect {
+    switch (this) {
+      case BoxForm.cube:
+        return 1;
+      case BoxForm.rectangular:
+      case BoxForm.squareSided:
+        return 1.6;
+      case BoxForm.upright:
+        return 0.46;
+    }
+  }
+
+  double get sideAspect {
+    switch (this) {
+      case BoxForm.cube:
+      case BoxForm.squareSided:
+        return 1;
+      case BoxForm.rectangular:
+        return 0.32;
+    // Square from above, so a side is the same panel as the front.
+      case BoxForm.upright:
+        return 0.46;
+    }
+  }
+
+  /// How the two side shots are described during capture.
+  String get sidePanelNoun {
+    switch (this) {
+      case BoxForm.cube:
+      case BoxForm.squareSided:
+        return 'square side';
+      case BoxForm.rectangular:
+        return 'narrow side';
+      case BoxForm.upright:
+        return 'upright side';
+    }
+  }
+}
+
 /// The four packaging-capture slots for the damage step. These are
 /// full-frame shots of the whole item (no crop, no OCR) sent to whichever
 /// [PackagingDamageDetector] handles the chosen [PackagingType] — a separate
