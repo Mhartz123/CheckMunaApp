@@ -7,54 +7,83 @@ void main() {
     await FdaDatasetChecker.ensureLoaded();
   });
 
-  test('matches a known advisory product embedded in noisy OCR text', () {
-    const ocrText = '''
-      MIRACLE WHITE
-      Advance Whitening Capsules
-      Food Supplement
-      Net Wt. 500mg x 30 capsules
-    ''';
-    final match = FdaDatasetChecker.match(ocrText);
-    expect(match, isNotNull);
-    expect(match!.advisoryNumber, 'FDA Advisory No. 2020-1618');
-    expect(match.category, 'Food Advisories');
+  group('matches a listed product', () {
+    test('from front-panel OCR split across lines', () {
+      const front = '''
+        Maden
+        Povidone-Iodine
+        (Thetadine)
+        10% Solution 30 mL
+      ''';
+      final match = FdaDatasetChecker.match(front);
+      expect(match, isNotNull);
+      expect(match!.productName, contains('Thetadine'));
+      expect(match.category, 'Drug Advisories');
+    });
+
+    test('with one long key misread by a single character', () {
+      // ZAOREN read as ZAOREM: the two exact keys carry the anchor, and the
+      // fuzzy pass makes up the third.
+      final match =
+          FdaDatasetChecker.match('OTC Dezhong Zaorem Anshen Jiaonang');
+      expect(match, isNotNull);
+      expect(match!.advisoryNumber, 'FDA Advisory No. 2021-1044');
+    });
   });
 
-  test('does not match ordinary compliant-looking label text', () {
-    const ocrText = '''
-      Pedzinc Multivitamins Syrup
-      FDA Reg. No. DR-XY12345
-      Store in a cool dry place. Take as directed.
-      Exp. 2027-05
-    ''';
-    final match = FdaDatasetChecker.match(ocrText);
-    expect(match, isNull);
+  group('never matches on one or two common words', () {
+    // Every one of these is a product name on the advisory CSV. Each is also
+    // what a legitimate product's front panel says, so none may match.
+    for (final front in const [
+      'Tetracycline Tablets',
+      'Alcohol 70% Solution 1L',
+      'Snow King Medicated Oil 15 ml',
+      'Tiger Balm Red Ointment',
+    ]) {
+      test('"$front" is not shipped as a matchable entry', () {
+        expect(FdaDatasetChecker.match(front), isNull);
+      });
+    }
+
+    test('a single distinctive word is not enough', () {
+      // "Richskin Germs Away …" is listed; its brand alone is one key.
+      expect(FdaDatasetChecker.match('RICHSKIN'), isNull);
+      expect(FdaDatasetChecker.match('Richskin Germs Away'), isNotNull);
+    });
+
+    test('two keys with no anchor are not enough', () {
+      // "Richskin Case Germs Away" has keys richskin, case, away; without
+      // the anchor "richskin", "case" and "away" are just English.
+      expect(FdaDatasetChecker.match('Case Germs Away'), isNull);
+    });
+  });
+
+  group('does not flag ordinary products', () {
+    for (final front in const [
+      'BIOGESIC Paracetamol 500 mg Tablet Unilab',
+      'Aluminum Hydroxide Magnesium Hydroxide Simeticone KREMIL-S '
+          'Chewable Tablet Antacid',
+      'Casino Ethyl Alcohol 70% Solution 500 mL',
+      'Green Cross Isopropyl Alcohol 70% Solution with Moisturizer 500 mL',
+      'Betadine Povidone-Iodine Antiseptic Solution 60 mL',
+      'Canesten Clotrimazole Cream 1% 20 g',
+      'Hydrite Oral Rehydration Salts',
+      'Efficascent Oil Extra Strength 100 mL',
+      'Vicks VapoRub Ointment 50 g',
+      'Pedzinc Multivitamins Syrup FDA Reg. No. DR-XY12345',
+    ]) {
+      test(front, () => expect(FdaDatasetChecker.match(front), isNull));
+    }
   });
 
   test('returns null for empty text', () {
     expect(FdaDatasetChecker.match(''), isNull);
   });
 
-  test('fuzzy pass recovers single-character OCR misreads', () {
-    // Two words of the known advisory name are garbled by one character each
-    // (ADVANCE→ADVANGE, WHITENING→WHITENLNG), dropping exact overlap to 3/5 =
-    // 0.6 — below the 0.8 threshold — so only the edit-distance-1 fuzzy pass
-    // can still recover the match.
-    const misreadOcr = '''
-      MIRACLE WHITE
-      ADVANGE WHITENLNG CAPSULES
-      Food Supplement
-    ''';
-    final outcome = FdaDatasetChecker.matchOutcome(misreadOcr);
-    expect(outcome.match, isNotNull);
-    expect(outcome.match!.advisoryNumber, 'FDA Advisory No. 2020-1618');
-    expect(outcome.bestRatio, greaterThanOrEqualTo(0.8));
-  });
-
-  test('matchOutcome exposes a sub-threshold bestRatio for a clear miss', () {
-    final outcome = FdaDatasetChecker.matchOutcome(
-        'Totally Unrelated Vitamin C Chewables 500mg');
+  test('matchOutcome reports a partial overlap without matching', () {
+    final outcome = FdaDatasetChecker.matchOutcome('Dezhong');
     expect(outcome.match, isNull);
-    expect(outcome.bestRatio, lessThan(0.8));
+    expect(outcome.bestRatio, greaterThan(0));
+    expect(outcome.bestRatio, lessThan(1));
   });
 }

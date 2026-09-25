@@ -12,8 +12,8 @@ import 'packaging_damage_service.dart';
 /// producing its own [ScanRecord]:
 ///
 ///  • [analyzeLabel] — label-only. **Warning:** the product name is checked
-///    against the FDA advisory list — [FdaDatasetChecker] (word-overlap +
-///    fuzzy), with [OnnxSemanticMatcher] as a removable last-ditch tier when
+///    against the FDA drug-advisory list — [FdaDatasetChecker] (gated
+///    distinctive-word match on the front panel), with [OnnxSemanticMatcher] as a removable last-ditch tier when
 ///    the name OCR was low-confidence. A hit here (and only here) routes to
 ///    [ComplianceStatus.warning] — deliberately not non-compliant, since an
 ///    advisory match flags the product for manual verification rather than
@@ -66,17 +66,15 @@ class ComplianceEngine {
   /// The FDA advisory-list check — the dataset tier, and with it the only
   /// route to [ComplianceStatus.warning].
   ///
-  /// DISABLED because the bundled list (`assets/data/fda_advisories.json`)
-  /// has not been cleaned yet, and it is false-flagging legitimate products.
-  /// Its word-overlap matching was built for recall against noisy OCR, so a
-  /// list still carrying generic entries matches ordinary product names —
-  /// and every such match turns a scan into a Warning.
+  /// This was off while the bundled list was the uncleaned 20.8k-entry
+  /// sheet, whose generic entries false-flagged ordinary products. It now
+  /// runs on the cleaned drug-advisory list, with the false-flag gate built
+  /// into the asset and [FdaDatasetChecker] — one or two common words in
+  /// common can no longer match. See `scripts/convert_fda_dataset.py`.
   ///
-  /// While off: no scan can come back Warning, the 20.8k-entry list is not
-  /// loaded, and the verdict rests on the expiry, ingredient-list and damage
-  /// checks alone. The semantic tier stays off too, since it only runs
-  /// behind this one. Set true once the dataset is cleaned.
-  static const bool _advisoryDatasetEnabled = false;
+  /// It is matched against the front panel only: the ingredient and expiry
+  /// panels are generic words by nature, and are what a product name is not.
+  static const bool _advisoryDatasetEnabled = true;
 
   /// Mean OCR confidence (per ML Kit, 0..1) on the product-name crop below
   /// which the name is treated as unreliable, opening the semantic fallback.
@@ -120,8 +118,9 @@ class ComplianceEngine {
 
   /// Runs the label-compliance check only. [textBySlot] maps each captured
   /// label [PhotoSlot] to the OCR text extracted from that slot's
-  /// (guide-cropped) photo (see LabelParser). [combinedText] concatenates all
-  /// label slots' text, used for the registry/name match.
+  /// (guide-cropped) photo (see LabelParser); its [PhotoSlot.front] text is
+  /// what the advisory list is matched against. [combinedText] concatenates
+  /// all label slots' text, kept as the record's extracted text.
   ///
   /// [ocrConfidence] is the mean ML Kit confidence (0..1) on the product-name
   /// crop (or null): it gates the last-ditch semantic tier.
@@ -303,7 +302,8 @@ class ComplianceEngine {
     FdaAdvisoryMatch? advisoryMatch;
     if (_advisoryDatasetEnabled) {
       await FdaDatasetChecker.ensureLoaded();
-      advisoryMatch = FdaDatasetChecker.matchOutcome(combinedText).match;
+      advisoryMatch =
+          FdaDatasetChecker.match(textBySlot[PhotoSlot.front] ?? '');
     }
 
     // Last-ditch semantic name check: runs ONLY when the product-name OCR was

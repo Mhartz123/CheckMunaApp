@@ -2,8 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 
-/// A product name from an FDA Philippines advisory (unregistered, recalled,
-/// or otherwise flagged) that matched the scanned label's OCR text.
+/// A product name from an FDA Philippines drug advisory (unregistered,
+/// counterfeit, or otherwise flagged) that matched the scanned label's OCR text.
 class FdaAdvisoryMatch {
   final String productName;
   final String advisoryNumber;
@@ -18,11 +18,9 @@ class FdaAdvisoryMatch {
   });
 }
 
-/// Result of a dataset lookup: the confident [match] if the overlap crossed
-/// the required threshold, plus [bestRatio] — the strongest word-overlap ratio
-/// seen against any advisory name (0..1). [bestRatio] lets the cascade tell a
-/// clear miss (ratio near 0) from a *weak/ambiguous* one (ratio close to but
-/// under threshold), which is the trigger to escalate to the semantic tier.
+/// Result of a dataset lookup: the confident [match] if an entry passed the
+/// gate, plus [bestRatio] — the largest share of any one entry's key words
+/// found in the text (0..1), whether or not that entry passed.
 class FdaMatchOutcome {
   final FdaAdvisoryMatch? match;
   final double bestRatio;
@@ -37,31 +35,59 @@ class _Entry {
   final String advisory;
   final String category;
   final String date;
-  final List<String> words;
+
+  /// The entry's distinctive words — see scripts/convert_fda_dataset.py.
+  final List<String> keys;
+
+  /// The keys that are not ordinary words; a subset of [keys].
+  final Set<String> anchors;
 
   const _Entry({
     required this.name,
     required this.advisory,
     required this.category,
     required this.date,
-    required this.words,
+    required this.keys,
+    required this.anchors,
   });
 }
 
-/// Looks up scanned label text against the FDA Philippines "unregistered
-/// health products" advisory list (assets/data/fda_advisories.json, ~20.8k
-/// entries converted from the source .xlsx via scripts/convert_fda_dataset.py).
+/// Looks up the product-name OCR against the FDA Philippines drug-advisory
+/// list (assets/data/fda_advisories.json, built from the cleaned advisory CSV
+/// by scripts/convert_fda_dataset.py).
 ///
-/// Matching is a significant-word-overlap heuristic, not exact substring
-/// matching: OCR text is noisy (line breaks, misreads) so we require most/all
-/// of an advisory product name's meaningful words (length >= 3) to appear
-/// anywhere in the scanned text, rather than requiring an exact contiguous
-/// phrase. This trades some precision (rare coincidental overlaps on generic
-/// words like "whitening capsules") for recall against noisy OCR — acceptable
-/// here since a match still only contributes one signal in ComplianceEngine.
+/// A match turns a scan into a Warning, so the gate is built against false
+/// flags first. One or two ordinary words in common can never match:
+///
+/// - Only an entry's *key* words count. Dosage forms, generic drug names,
+///   label boilerplate, strengths, and words many entries share are stripped
+///   when the asset is built, and entries left with fewer than two keys
+///   ("Tetracycline Tablets", "Alcohol 70% Solution") are not shipped at all.
+/// - At least [_minMatchedKeys] keys must be found exactly, covering every key
+///   of a short name and [_longNameCoverage] of a long one.
+/// - At least one exactly-matched key must be an *anchor*: a word that is not
+///   ordinary English ("efficascent", not "premium" or "tiger"). Two common
+///   words together are still two common words.
+/// - The exactly-matched keys must total [_minMatchedKeyChars] letters, so two
+///   short syllables ("qing zhu") are not enough.
+/// - OCR misreads are tolerated on at most one long key (one edit), and never
+///   on the anchor.
+///
+/// Callers should pass the front-panel text only. The ingredient and expiry
+/// panels are full of generic words that a product name is not.
 class FdaDatasetChecker {
   static const String _assetPath = 'assets/data/fda_advisories.json';
-  static final RegExp _wordSplitRegex = RegExp(r'[^A-Z0-9]+');
+  static final RegExp _wordSplitRegex = RegExp(r'[^a-z0-9]+');
+
+  static const int _minMatchedKeys = 2;
+  static const int _minMatchedKeyChars = 9;
+
+  /// Names with more keys than [_shortNameKeys] need this share of them.
+  static const double _longNameCoverage = 0.8;
+  static const int _shortNameKeys = 4;
+
+  /// Only keys at least this long may be recovered by a one-edit fuzzy match.
+  static const int _minFuzzyWordLength = 6;
 
   static List<_Entry>? _entries;
   static Future<void>? _loading;
@@ -77,84 +103,80 @@ class FdaDatasetChecker {
     final List<dynamic> raw = json.decode(jsonStr) as List<dynamic>;
     _entries = raw.map((row) {
       final list = row as List<dynamic>;
-      final name = list[0] as String;
       return _Entry(
-        name: name,
+        name: list[0] as String,
         advisory: list[1] as String,
         category: list[2] as String,
         date: list[3] as String,
-        words: _significantWords(name),
+        keys: (list[4] as List<dynamic>).cast<String>(),
+        anchors: (list[5] as List<dynamic>).cast<String>().toSet(),
       );
     }).toList();
   }
 
-  /// Convenience wrapper returning just the confident match (or null). Kept
-  /// for callers/tests that don't need the near-miss score.
-  static FdaAdvisoryMatch? match(String combinedText) =>
-      matchOutcome(combinedText).match;
+  /// Convenience wrapper returning just the confident match (or null).
+  static FdaAdvisoryMatch? match(String frontText) =>
+      matchOutcome(frontText).match;
 
-  /// Only advisory words at least this long are eligible for fuzzy (edit-
-  /// distance-1) matching — short words fuzz-match too easily ("OIL"↔"OIS").
-  static const int _minFuzzyWordLength = 4;
-
-  /// Fuzzy matching is only attempted on entries whose *exact* overlap already
-  /// reached this ratio, both to bound cost (skip the ~10k clear misses) and
-  /// because promoting a very-low-overlap entry would be a stretch.
-  static const double _fuzzyConsiderationFloor = 0.5;
-
-  /// Returns the first advisory entry whose product name substantially
-  /// overlaps with [combinedText] (exact significant-word overlap, then a
-  /// bounded edit-distance-1 fuzzy pass to tolerate OCR misreads), along with
-  /// the best overlap ratio seen. Call [ensureLoaded] (and await it) first.
-  static FdaMatchOutcome matchOutcome(String combinedText) {
+  /// Returns the entry that passes the gate with the most matched key
+  /// letters, if any. Call [ensureLoaded] (and await it) first.
+  static FdaMatchOutcome matchOutcome(String frontText) {
     final entries = _entries;
     if (entries == null) {
       return const FdaMatchOutcome(match: null, bestRatio: 0);
     }
 
-    final textWords = _significantWords(combinedText).toSet();
+    final textWords = _words(frontText).toSet();
     if (textWords.isEmpty) {
       return const FdaMatchOutcome(match: null, bestRatio: 0);
     }
 
     var bestRatio = 0.0;
+    _Entry? best;
+    var bestChars = 0;
     for (final entry in entries) {
-      if (entry.words.isEmpty) continue;
-
-      final exactCount = entry.words.where(textWords.contains).length;
-      var ratio = exactCount / entry.words.length;
-      final requiredRatio = entry.words.length <= 2 ? 1.0 : 0.8;
-
-      // Fuzzy promotion for near-miss entries only: try to recover words the
-      // exact pass missed via a single-edit (OCR misread) match.
-      if (ratio < requiredRatio && ratio >= _fuzzyConsiderationFloor) {
-        var fuzzyCount = exactCount;
-        for (final word in entry.words) {
-          if (word.length < _minFuzzyWordLength) continue;
-          if (textWords.contains(word)) continue;
-          if (_hasSingleEditMatch(word, textWords)) fuzzyCount++;
-        }
-        ratio = fuzzyCount / entry.words.length;
-      }
-
+      final exact = entry.keys.where(textWords.contains).toList();
+      final ratio = exact.length / entry.keys.length;
       if (ratio > bestRatio) bestRatio = ratio;
 
-      if (ratio >= requiredRatio) {
-        return FdaMatchOutcome(
-          match: FdaAdvisoryMatch(
-            productName: entry.name,
-            advisoryNumber: entry.advisory,
-            category: entry.category,
-            datePosted: entry.date,
-          ),
-          bestRatio: ratio,
-        );
+      if (exact.length < _minMatchedKeys) continue;
+      if (!exact.any(entry.anchors.contains)) continue;
+      final chars = exact.fold<int>(0, (sum, w) => sum + w.length);
+      if (chars < _minMatchedKeyChars) continue;
+
+      final required = entry.keys.length <= _shortNameKeys
+          ? entry.keys.length
+          : (entry.keys.length * _longNameCoverage).ceil();
+      var matched = exact.length;
+      if (matched < required && matched + 1 >= required) {
+        // One key short: let a single OCR misread of a long key make it up.
+        final recovered = entry.keys.any((k) =>
+            !textWords.contains(k) &&
+            k.length >= _minFuzzyWordLength &&
+            _hasSingleEditMatch(k, textWords));
+        if (recovered) matched++;
+      }
+      if (matched < required) continue;
+
+      if (chars > bestChars) {
+        best = entry;
+        bestChars = chars;
       }
     }
-    return FdaMatchOutcome(match: null, bestRatio: bestRatio);
+
+    if (best == null) return FdaMatchOutcome(match: null, bestRatio: bestRatio);
+    return FdaMatchOutcome(
+      match: FdaAdvisoryMatch(
+        productName: best.name,
+        advisoryNumber: best.advisory,
+        category: best.category,
+        datePosted: best.date,
+      ),
+      bestRatio: bestRatio,
+    );
   }
 
-  /// True if any word in [textWords] (length >= [_minFuzzyWordLength]) is
+  /// True if any word in [textWords] of at least [_minFuzzyWordLength] is
   /// within edit distance 1 of [target] — one substitution, insertion, or
   /// deletion, the shape of a typical single-character OCR misread.
   static bool _hasSingleEditMatch(String target, Set<String> textWords) {
@@ -198,9 +220,11 @@ class FdaDatasetChecker {
     return true;
   }
 
-  static List<String> _significantWords(String text) {
+  /// Same split the asset builder uses: lowercase alphanumeric runs of at
+  /// least 3 characters.
+  static List<String> _words(String text) {
     return text
-        .toUpperCase()
+        .toLowerCase()
         .split(_wordSplitRegex)
         .where((w) => w.length >= 3)
         .toList();
