@@ -1544,17 +1544,20 @@ class _CameraScreenState extends State<CameraScreen>
   /// opposite ends of the panel into one string - an MX3 carton came back as
   /// "M MS" and a Medicol carton as "LE NT DNE*" that way. Which line comes
   /// first is decided by [ProductNamePicker], so a brand set below a larger
-  /// generic name is still found.
+  /// generic name is still found. A stacked logo above the name is prefixed to
+  /// it on that first line ("daily plus PearlSkin White Tomato").
   String _frontTextByProminence(RecognizedText recognized) {
     final lines = OcrGeometry.horizontalLines(
       recognized,
       maxSkewDegrees: kProductNameMaxSkewDegrees,
     );
-    final prominent = ProductNamePicker.orderForName(lines);
-    final headline = prominent
-        .map((line) => line.text.trim())
-        .where((text) => text.isNotEmpty)
-        .join('\n');
+    final reading = ProductNamePicker.read(lines);
+    debugPrint('OCR name: brand "${reading.brand.map((l) => l.text).join(' ')}"'
+        ' name "${reading.name.map((l) => l.text).join(' ')}"');
+    final headline = <String>[
+      reading.display,
+      for (final line in reading.rest) line.text.trim(),
+    ].where((text) => text.isNotEmpty).join('\n');
     if (headline.isEmpty) return recognized.text;
     return '$headline\n${recognized.text}';
   }

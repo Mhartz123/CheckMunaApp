@@ -301,11 +301,18 @@ Including the surrounding text makes it harder to read correctly.
 
 Being clear about the limits is part of using it well.
 
-**The FDA list is a snapshot, not a live feed.** The advisory list — around
-20,800 entries from the FDA Philippines *List of Unregistered Health Products* —
-is bundled inside the app. It reflects the data as of the app's release and
-only updates when the app itself is updated. A product added to the FDA list
-after that won't be caught.
+**The FDA list is a snapshot, not a live feed.** The advisory list — the FDA
+Philippines drug advisories, about 3,100 rows — is bundled inside the app. It
+reflects the data as of the app's release and only updates when the app itself
+is updated. A product added to the FDA list after that won't be caught.
+
+**Only distinctive advisory names are checked.** To keep one or two common
+words from flagging a legitimate product, an advisory name is only matched on
+its distinctive words, and at least one of them must be a coined name rather
+than an ordinary word. Names that legitimate products share — "Tetracycline
+Tablets", "Alcohol 70% Solution" — are left out entirely, which is about 60% of
+the list. The name is read from the front-panel photo only.
+`scripts/convert_fda_dataset.py` builds the list and explains the rules.
 
 **Damage detection only covers cardboard boxes.** Foil and bottle scans return
 *Check unavailable*. The detector recognises **dents** and **scratches** —
@@ -406,7 +413,7 @@ lib/
                                result, records, record detail, PDF report builder
   services/
     compliance_engine.dart     Verdict logic for all three flows
-    fda_dataset_checker.dart   Word-overlap + fuzzy match against the advisory list
+    fda_dataset_checker.dart   Gated distinctive-word match against the advisory list
     onnx_semantic_matcher.dart Optional last-ditch name matcher (see below)
     damage_detection_service.dart  YOLOv8n inference: letterbox 640 → NMS
     packaging_damage_service.dart  Per-packaging-type detector registry

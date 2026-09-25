@@ -39,6 +39,22 @@ const double kStrengthAdjacencyLineHeights = 1.5;
 const double kNameWordBonus = 0.05;
 const double kNameWordBonusMax = 0.10;
 
+/// A stacked logo lockup is two or more one-word lines, each at most
+/// [kLogoWordMaxLength] characters, set one above another: heights within
+/// [kLogoHeightRatio] of each other, vertical gap at most
+/// [kLogoGapLineHeights] of the smaller line, and overlapping horizontally by
+/// at least [kLogoOverlap] of the narrower line.
+///
+/// The word bonus above was not enough on its own: on the real PearlSkin
+/// bottle the "daily plus" logo is set far larger than the product name, and
+/// once "plus" was excluded the other half of the logo, "daily", won the
+/// panel instead. A logo line has to be recognised as part of a logo, not
+/// outscored.
+const int kLogoWordMaxLength = 10;
+const double kLogoHeightRatio = 0.7;
+const double kLogoGapLineHeights = 0.8;
+const double kLogoOverlap = 0.3;
+
 /// Generic (non-proprietary) names and salt/chemical words common on OTC
 /// packaging in the Philippines, lowercase.
 ///
@@ -117,6 +133,36 @@ final RegExp _registeredMark = RegExp(r'[®™]|\((?:R|TM)\)');
 /// against a digit (MX3, C2, B12).
 final RegExp _letterRun = RegExp(r'[A-Za-z]{2,}|[A-Za-z]\d|\d[A-Za-z]');
 
+/// What [ProductNamePicker.read] found on a front panel.
+class ProductNameReading {
+  const ProductNameReading({
+    this.brand = const <TextLine>[],
+    this.name = const <TextLine>[],
+    this.rest = const <TextLine>[],
+  });
+
+  /// Lines of a stacked logo lockup set apart from the name ("daily" over
+  /// "plus"), top to bottom. Empty when there is none, or when the lockup is
+  /// itself the name.
+  final List<TextLine> brand;
+
+  /// Lines making up the product name: one line, or the whole lockup when it
+  /// is the only name on the panel. Empty when nothing was read.
+  final List<TextLine> name;
+
+  /// The other display-type lines, in the order [ProductNamePicker] ranks them.
+  final List<TextLine> rest;
+
+  /// Name first, then the other display-type lines. Brand lines are left out.
+  List<TextLine> get ordered => <TextLine>[...name, ...rest];
+
+  /// Brand and name as one string: "daily plus PearlSkin White Tomato".
+  String get display => <TextLine>[...brand, ...name]
+      .map((line) => line.text.trim())
+      .where((text) => text.isNotEmpty)
+      .join(' ');
+}
+
 /// Chooses which front-panel line is the product's name.
 ///
 /// The earlier rule — the tallest text is the name — holds for supplements,
@@ -140,21 +186,58 @@ final RegExp _letterRun = RegExp(r'[A-Za-z]{2,}|[A-Za-z]\d|\d[A-Za-z]');
 /// generic lines is found, the product has no brand on this panel and the
 /// generic name is the right answer, so the tallest line wins exactly as
 /// before.
+///
+/// Before any of that, a stacked logo lockup (see [kLogoWordMaxLength]) is
+/// set aside as the brand, so neither of its lines can win and its size does
+/// not set the height floor for the name. If nothing else on the panel scores
+/// as a brand, the lockup is the name after all: a two-line one-word name is
+/// shaped exactly like a logo. Panels with no lockup are ranked exactly as
+/// before.
 class ProductNamePicker {
   const ProductNamePicker._();
 
   /// [lines] reordered so the most likely product name comes first, followed
   /// by the other display-type lines in reading order. Callers take the first
   /// usable line as the name.
-  static List<TextLine> orderForName(List<TextLine> lines) {
-    if (lines.isEmpty) return const <TextLine>[];
+  static List<TextLine> orderForName(List<TextLine> lines) =>
+      read(lines).ordered;
+
+  /// The brand lockup, name and other display-type lines on a front panel.
+  static ProductNameReading read(List<TextLine> lines) {
+    final lockup = _logoLockup(lines);
+    final body = lockup.isEmpty
+        ? lines
+        : <TextLine>[
+            for (final line in lines)
+              if (!lockup.contains(line)) line,
+          ];
+    final ranked = _rank(body);
+
+    if (lockup.isNotEmpty && !ranked.foundBrand) {
+      return ProductNameReading(name: lockup, rest: ranked.ordered);
+    }
+    if (ranked.ordered.isEmpty) return const ProductNameReading();
+    return ProductNameReading(
+      brand: lockup,
+      name: <TextLine>[ranked.ordered.first],
+      rest: ranked.ordered.sublist(1),
+    );
+  }
+
+  /// [lines] ranked name-first, and whether a line other than a generic name
+  /// was found to put there.
+  static ({List<TextLine> ordered, bool foundBrand}) _rank(
+      List<TextLine> lines) {
+    if (lines.isEmpty) return (ordered: const <TextLine>[], foundBrand: false);
 
     var tallest = 0.0;
     for (final line in lines) {
       final h = lineHeight(line);
       if (h > tallest) tallest = h;
     }
-    if (tallest <= 0) return OcrGeometry.prominentLines(lines);
+    if (tallest <= 0) {
+      return (ordered: OcrGeometry.prominentLines(lines), foundBrand: false);
+    }
 
     final candidates = <TextLine>[
       for (final line in lines)
@@ -179,18 +262,110 @@ class ProductNamePicker {
       final prominent = OcrGeometry.prominentLines(lines)
           .where((l) => !isDescriptorLine(l.text))
           .toList();
-      return prominent.isEmpty ? OcrGeometry.prominentLines(lines) : prominent;
+      return (
+        ordered:
+            prominent.isEmpty ? OcrGeometry.prominentLines(lines) : prominent,
+        foundBrand: false,
+      );
     }
 
     TextLine best = brandScores.keys.first;
     for (final entry in brandScores.entries) {
       if (entry.value > brandScores[best]!) best = entry.key;
     }
-    return <TextLine>[
-      best,
-      for (final line in candidates)
-        if (!identical(line, best) && !isDescriptorLine(line.text)) line,
-    ];
+    return (
+      ordered: <TextLine>[
+        best,
+        for (final line in candidates)
+          if (!identical(line, best) && !isDescriptorLine(line.text)) line,
+      ],
+      foundBrand: true,
+    );
+  }
+
+  /// The lines of the largest stacked logo lockup on the panel, top to
+  /// bottom, or empty when there is none.
+  ///
+  /// Only one-word lines can take part, joining words included ("plus"), but
+  /// not generic names, dosage forms or strengths: a generic set one word per
+  /// line is still a generic. The lockup must be display type, and must hold
+  /// at least one line that is more than a joining word.
+  static List<TextLine> _logoLockup(List<TextLine> lines) {
+    var tallest = 0.0;
+    for (final line in lines) {
+      final h = lineHeight(line);
+      if (h > tallest) tallest = h;
+    }
+    if (tallest <= 0) return const <TextLine>[];
+
+    final eligible = <TextLine>[
+      for (final line in lines)
+        if (_couldBeLogoLine(line.text)) line,
+    ]..sort((a, b) => a.boundingBox.top.compareTo(b.boundingBox.top));
+
+    final stacks = <List<TextLine>>[];
+    for (final line in eligible) {
+      List<TextLine>? target;
+      for (final stack in stacks.reversed) {
+        if (_stacksUnder(stack.last, line)) {
+          target = stack;
+          break;
+        }
+      }
+      if (target != null) {
+        target.add(line);
+      } else {
+        stacks.add(<TextLine>[line]);
+      }
+    }
+
+    var best = const <TextLine>[];
+    var bestHeight = 0.0;
+    for (final stack in stacks) {
+      if (stack.length < 2) continue;
+      if (stack.every((l) => _isConnectorOnly(l.text))) continue;
+      var h = 0.0;
+      for (final line in stack) {
+        final lh = lineHeight(line);
+        if (lh > h) h = lh;
+      }
+      if (h < tallest * kNameCandidateHeightFloor) continue;
+      if (h > bestHeight) {
+        best = stack;
+        bestHeight = h;
+      }
+    }
+    return best;
+  }
+
+  static bool _couldBeLogoLine(String text) {
+    final t = text.trim();
+    if (t.isEmpty || t.length > kLogoWordMaxLength) return false;
+    if (t.contains(RegExp(r'\s'))) return false;
+    if (_isConnectorOnly(t)) return true;
+    if (isDescriptorLine(t)) return false;
+    return genericRatio(t) < kGenericWordRatio;
+  }
+
+  /// Whether [lower] sits directly under [upper] as the next line of a stack.
+  static bool _stacksUnder(TextLine upper, TextLine lower) {
+    final hu = lineHeight(upper);
+    final hl = lineHeight(lower);
+    final smaller = hu < hl ? hu : hl;
+    final larger = hu < hl ? hl : hu;
+    if (larger <= 0 || smaller / larger < kLogoHeightRatio) return false;
+
+    final a = upper.boundingBox;
+    final b = lower.boundingBox;
+    final gap = b.top - a.bottom;
+    if (gap < -smaller * 0.5 || gap > smaller * kLogoGapLineHeights) {
+      return false;
+    }
+
+    final overlap = (a.right < b.right ? a.right : b.right) -
+        (a.left > b.left ? a.left : b.left);
+    final narrower = a.width < b.width ? a.width : b.width;
+    return narrower > 0 && overlap >= narrower * kLogoOverlap;
   }
 
   /// Height of a line's display type: its tallest element, which ignores a
