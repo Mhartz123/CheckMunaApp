@@ -177,6 +177,130 @@ void main() {
     });
   });
 
+  group('verdict wording', () {
+    // A bare "Compliant" reads as a verdict on the whole product. Every
+    // verdict has to name the requirements it is based on — and only the ones
+    // the scan actually checked, or actually failed.
+    const ran = DamageCheckResult(
+      available: true,
+      message: 'No packaging damage detected.',
+    );
+
+    // [damage] defaults to what the engine would have stored: a check that
+    // ran for the kinds that include one, none for a label-only scan.
+    ScanRecord record(
+      ScanKind kind,
+      ComplianceStatus status, {
+      String matchedKeyword = '—',
+      List<String> reasons = const [],
+      DamageCheckResult? damage,
+    }) =>
+        ScanRecord(
+          kind: kind,
+          status: status,
+          matchedKeyword: matchedKeyword,
+          reasons: reasons,
+          productName: '—',
+          expiration: '—',
+          ingredients: '—',
+          extractedText: '',
+          damageCheck: damage ??
+              (kind == ScanKind.label
+                  ? const DamageCheckResult.notPerformed()
+                  : ran),
+          scannedAt: DateTime.parse('2026-08-16T10:30:00.000'),
+        );
+
+    const expired = 'Expired — the printed expiration date (2024-01) has passed.';
+    const dented = 'Packaging damage — Dent detected (84% confidence).';
+
+    test('a compliant verdict names only what the scan checked', () {
+      expect(record(ScanKind.both, ComplianceStatus.compliant).statusBadge,
+          'COMPLIANT WITH FDA LABELING AND PACKAGING REQUIREMENTS');
+      expect(record(ScanKind.label, ComplianceStatus.compliant).statusBadge,
+          'COMPLIANT WITH FDA LABELING REQUIREMENTS');
+      expect(record(ScanKind.damage, ComplianceStatus.compliant).statusBadge,
+          'COMPLIANT WITH FDA PACKAGING REQUIREMENTS');
+    });
+
+    test('a non-compliant verdict names the requirement that failed', () {
+      expect(
+          record(ScanKind.label, ComplianceStatus.nonCompliant,
+              matchedKeyword: 'expired', reasons: const [expired]).statusBadge,
+          'NON-COMPLIANT BASED ON FDA LABELING REQUIREMENTS');
+      expect(
+          record(ScanKind.damage, ComplianceStatus.nonCompliant,
+                  matchedKeyword: 'packaging damage', reasons: const [dented])
+              .statusBadge,
+          'NON-COMPLIANT BASED ON FDA PACKAGING REQUIREMENTS');
+    });
+
+    test('an inspection is blamed on whichever half failed', () {
+      expect(
+          record(ScanKind.both, ComplianceStatus.nonCompliant,
+              matchedKeyword: 'expired', reasons: const [expired]).statusBadge,
+          'NON-COMPLIANT BASED ON FDA LABELING REQUIREMENTS');
+      expect(
+          record(ScanKind.both, ComplianceStatus.nonCompliant,
+                  matchedKeyword: 'packaging damage', reasons: const [dented])
+              .statusBadge,
+          'NON-COMPLIANT BASED ON FDA PACKAGING REQUIREMENTS');
+      expect(
+          record(ScanKind.both, ComplianceStatus.nonCompliant,
+              matchedKeyword: 'expired, packaging damage',
+              reasons: const [expired, dented]).statusBadge,
+          'NON-COMPLIANT BASED ON FDA LABELING AND PACKAGING REQUIREMENTS');
+    });
+
+    test('an old inspection with no reasons reads as a labeling failure', () {
+      expect(record(ScanKind.both, ComplianceStatus.nonCompliant).statusBadge,
+          'NON-COMPLIANT BASED ON FDA LABELING REQUIREMENTS');
+    });
+
+    test('a warning is based on the advisory, whatever was scanned', () {
+      for (final kind in ScanKind.values) {
+        expect(record(kind, ComplianceStatus.warning).statusBadge,
+            'WARNING BASED ON FDA ADVISORY',
+            reason: kind.name);
+      }
+    });
+
+    test('the title is the same verdict in sentence case', () {
+      expect(record(ScanKind.both, ComplianceStatus.compliant).statusTitle,
+          'Compliant with FDA labeling and packaging requirements');
+    });
+
+    test('an old damage scan whose check never ran has no result', () {
+      // Saved as compliant before the engine refused these outright. Nothing
+      // was inspected, so it must not read as a clean result.
+      final legacy = record(ScanKind.damage, ComplianceStatus.compliant,
+          damage: const DamageCheckResult(
+            available: false,
+            message: 'Damage check unavailable (model failed to load).',
+          ));
+      expect(legacy.hasNoVerdict, isTrue);
+      expect(legacy.statusBadge, 'NO RESULT — DAMAGE CHECK COULD NOT RUN');
+      expect(legacy.statusBadge, isNot(contains('COMPLIANT')));
+      expect(legacy.note, contains('never inspected'));
+    });
+
+    test('an old inspection whose damage check never ran speaks for the '
+        'label only', () {
+      final legacy = record(ScanKind.both, ComplianceStatus.compliant,
+          damage: const DamageCheckResult.placeholder());
+      expect(legacy.hasNoVerdict, isFalse);
+      expect(legacy.statusBadge, 'COMPLIANT WITH FDA LABELING REQUIREMENTS');
+    });
+
+    test('a scan whose damage check ran always has a verdict', () {
+      expect(record(ScanKind.damage, ComplianceStatus.compliant).hasNoVerdict,
+          isFalse);
+      expect(
+          record(ScanKind.label, ComplianceStatus.compliant).hasNoVerdict,
+          isFalse);
+    });
+  });
+
   group('DamageCheckResult', () {
     test('notPerformed and placeholder are both unavailable, not clean', () {
       // "Couldn't run" must stay distinguishable from "ran and found

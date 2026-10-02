@@ -577,11 +577,13 @@ class _PackagingCard extends StatelessWidget {
       case PackagingType.box:
       case PackagingType.bottle:
         return 'Photograph the product name, expiration date and ingredient '
-            'list printed on the ${type.label.toLowerCase()}.';
+            'list printed on the ${type.label.toLowerCase()}. The ingredient '
+            'list is required when the ${type.label.toLowerCase()} is the '
+            'product\'s only primary packaging.';
       case PackagingType.foil:
         return 'Photograph the product name and expiration date. Foil is not '
-            'required to carry an ingredient list, so a missing one is not '
-            'flagged.';
+            'required to carry an ingredient list, so a missing one is '
+            'disregarded.';
     }
   }
 

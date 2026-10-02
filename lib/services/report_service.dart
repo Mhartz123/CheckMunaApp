@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import '../models/scan_record.dart';
 import 'app_prefs.dart';
+import 'debug_advisories.dart';
 import 'scan_store.dart';
 
 /// Downscale ladder for uploaded photos: longest edge in pixels, then JPEG
@@ -119,6 +120,13 @@ class ReportService {
     // Informed consent is a hard gate: no answer, an answer to an older
     // version of the notice, or "no" all mean nothing leaves the phone.
     if (!AppPrefs.instance.sharingAllowed) return false;
+
+    // A Warning from a name typed into the hidden debug screen is a test, not
+    // a finding. Keep it off the FDA monitoring dashboard.
+    if (record.reasons
+        .any((r) => r.startsWith(DebugAdvisories.reasonPrefix))) {
+      return false;
+    }
 
     // Skip if endpoint hasn't been configured yet
     if (_endpoint.contains('YOUR_PROJECT_NAME')) {

@@ -28,12 +28,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/tokenizer/vocab.json
     - assets/data/fda_advisories.json
-    # ONNX semantic-matcher tier (removable bottom layer of the cascade).
-    - assets/model_qint8_arm64.onnx
-    - assets/fda_index_embeddings_fp16.npy
-    - assets/fda_index_names.txt
     # On-device YOLO (INT8) packaging-damage detectors, one per packaging type.
     - assets/box_damage_yolo11n_640_int8.onnx
     - assets/bottle_damage_yolov8n_640_int8.onnx

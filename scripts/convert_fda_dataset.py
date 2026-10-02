@@ -18,8 +18,9 @@ on the phone:
   many entries ("otc", "herbal") are removed. What is left is what actually
   names the product.
 - anchors: the keys that are not ordinary words — at least 5 letters and not a
-  whole-word token in the bundled BERT vocabulary (assets/tokenizer/vocab.json,
-  ~30k common English words and names). "efficascent" is an anchor; "premium",
+  whole-word token in the common-word list (scripts/common_words_vocab.json,
+  ~30k common English words and names; a build-time input, not shipped in the
+  app). "efficascent" is an anchor; "premium",
   "tiger", "cough" are not.
 
 An entry is only written out if it has at least MIN_KEYS keys totalling
@@ -40,7 +41,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 csv_path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "FDA_Drug_Advisories_Cleaned.csv"
 out_path = ROOT / "assets" / "data" / "fda_advisories.json"
-vocab_path = ROOT / "assets" / "tokenizer" / "vocab.json"
+vocab_path = ROOT / "scripts" / "common_words_vocab.json"
 picker_path = ROOT / "lib" / "services" / "product_name_picker.dart"
 
 CATEGORY = "Drug Advisories"

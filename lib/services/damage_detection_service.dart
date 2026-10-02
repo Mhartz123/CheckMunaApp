@@ -96,9 +96,8 @@ class DamageModelException implements Exception {
 }
 
 /// Packaging-damage check backed by an **on-device** Ultralytics YOLO model,
-/// run through the `onnxruntime` engine already bundled for the semantic
-/// matcher. No network, no API key, no per-scan cost — scans work fully
-/// offline.
+/// run through the `onnxruntime` engine. No network, no API key, no per-scan
+/// cost — scans work fully offline.
 ///
 /// One instance per model: [box], [bottle] and [foil] below. Each is INT8-quantized
 /// (~3 MB) with the detection head kept in float32 — see

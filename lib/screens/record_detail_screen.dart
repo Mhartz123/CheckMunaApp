@@ -236,6 +236,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   }
 
   Color _bandColor(ScanRecord record) {
+    if (record.hasNoVerdict) return AppColors.surfaceAlt;
     switch (record.status) {
       case ComplianceStatus.compliant:
         return AppColors.compliantBg;
@@ -279,30 +280,17 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                       color: Colors.white, size: 19),
                 ),
                 const SizedBox(width: 10),
+                // The verdict is a full sentence now, so it takes the whole
+                // band; the pill that used to repeat it in capitals is gone.
                 Expanded(
                   child: Text(
-                    record.statusTitle,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: record.statusColor,
-                    ),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: record.statusColor,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
                     record.statusBadge,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.3,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 0.4,
+                      letterSpacing: 0.2,
+                      color: record.statusColor,
                     ),
                   ),
                 ),

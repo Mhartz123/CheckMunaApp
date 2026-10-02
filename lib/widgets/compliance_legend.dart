@@ -3,7 +3,11 @@ import 'package:flutter/material.dart';
 import '../screens/home_screen.dart';
 import '../theme/app_colors.dart';
 
-/// The three compliance verdicts and what each one means for the user.
+/// The scan results and what each one means for the user.
+///
+/// Every result names what it is based on — see `ScanRecordUi.statusTitle` —
+/// rather than a bare "Compliant", which would read as a verdict on the whole
+/// product.
 ///
 /// Shared by the onboarding guide ([HomeScreen]) and the quick legend sheet
 /// ([showLegendSheet]) so the two can never drift apart.
@@ -18,23 +22,57 @@ class ComplianceLegend extends StatelessWidget {
       children: [
         _LegendItem(
           color: Color(0xFF4CAF50),
-          label: 'Compliant',
+          label: 'COMPLIANT WITH FDA LABELING AND PACKAGING REQUIREMENTS',
           description:
-              'The label passed every check the app runs — it matched no FDA advisory, and the expiration date and ingredient list are present and readable. This is not an FDA endorsement; follow the product instructions for proper dosage.',
+              'No advisory match, a legible and valid expiry date, and no detected defect. This is not an FDA endorsement; follow the product instructions for proper dosage.',
         ),
         _LegendItem(
           color: Color(0xFFFF9800),
-          label: 'Non-Compliant',
+          label: 'NON-COMPLIANT BASED ON FDA LABELING REQUIREMENTS',
           description:
-              'The label failed at least one check — expired, no or unreadable expiration date, no or unreadable ingredient list, or damaged packaging. Inadvisable to consume — report to the local FDA hotline.',
+              'The expiry date is missing, illegible, or past — or the ingredient list is missing or illegible on a box or bottle. Inadvisable to consume — report to the local FDA hotline.',
+        ),
+        _LegendItem(
+          color: Color(0xFFFF9800),
+          label: 'NON-COMPLIANT BASED ON FDA PACKAGING REQUIREMENTS',
+          description:
+              'A Packaging Integrity Defect is detected. Inadvisable to consume — report to the local FDA hotline.',
         ),
         _LegendItem(
           color: Color(0xFFE57373),
-          label: 'Warned',
+          label: 'WARNING BASED ON FDA ADVISORY',
           description:
-              'The product matched an FDA advisory. Needs manual checking — confirm its status with the local FDA hotline before sale or use.',
+              'The product name matches an FDA advisory, recall, or unregistered-product record. Needs manual checking — confirm its status with the local FDA hotline before sale or use.',
+        ),
+        _LegendNote(
+          'Ingredient list: required only on a box or bottle, and only when that box or bottle is the product\'s only primary packaging. Foil (sachets, blister packs) is not required to carry one, so a missing list on foil is disregarded.',
+        ),
+        _LegendNote(
+          'A result only names what was scanned: a label check reports on labeling requirements, a damage check on packaging requirements, and Inspection Mode on both.',
+        ),
+        _LegendNote(
+          'If the damage check cannot run, the scan is reported as a problem and gets no result at all.',
         ),
       ],
+    );
+  }
+}
+
+/// A rule that qualifies the results above — when a requirement applies, or
+/// when no result is given at all.
+class _LegendNote extends StatelessWidget {
+  final String text;
+
+  const _LegendNote(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 12, color: AppColors.muted, height: 1.5),
+      ),
     );
   }
 }

@@ -9,7 +9,6 @@ Future<ScanRecord> _analyze(Map<PhotoSlot, String> textBySlot) {
   return ComplianceEngine.analyzeLabel(
     textBySlot: textBySlot,
     combinedText: textBySlot.values.join('\n'),
-    ocrConfidence: null,
     dateCode: DateCode(
       expiry: DateTime(2099, 10, 31),
       status: DateCodeStatus.parsed,
@@ -65,7 +64,6 @@ void main() {
         PhotoSlot.ingredients: 'Tetracycline HCl 250 mg',
       },
       combinedText: 'Tetracycline Tablets\nEXP 01/2020\nTetracycline HCl',
-      ocrConfidence: null,
       dateCode: DateCode(
         expiry: DateTime(2020, 1, 31),
         status: DateCodeStatus.parsed,

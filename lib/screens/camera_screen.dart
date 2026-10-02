@@ -818,7 +818,6 @@ class _CameraScreenState extends State<CameraScreen>
     final buffer = StringBuffer();
     final timings = ScanTimingsBuilder();
 
-    double? nameConfidence;
     DateCode? dateCode;
     try {
       for (final spec in _labelSlots) {
@@ -852,7 +851,6 @@ class _CameraScreenState extends State<CameraScreen>
 
         switch (spec.slot) {
           case PhotoSlot.front:
-            nameConfidence = _meanLineConfidence(recognized);
             textBySlot[spec.slot] = _frontTextByProminence(recognized);
           case PhotoSlot.expiration:
             textBySlot[spec.slot] = recognized.text;
@@ -869,7 +867,6 @@ class _CameraScreenState extends State<CameraScreen>
     return _OcrResult(
       textBySlot: textBySlot,
       combinedText: buffer.toString(),
-      nameConfidence: nameConfidence,
       dateCode: dateCode,
       timings: timings.build(),
     );
@@ -1588,7 +1585,6 @@ class _CameraScreenState extends State<CameraScreen>
     final record = await ComplianceEngine.analyzeLabel(
       textBySlot: ocr.textBySlot,
       combinedText: ocr.combinedText,
-      ocrConfidence: ocr.nameConfidence,
       ocrTimings: ocr.timings,
       dateCode: ocr.dateCode,
       expirationDeclaredMissing:
@@ -1629,11 +1625,17 @@ class _CameraScreenState extends State<CameraScreen>
     await _settleProcessingOverlay();
     if (!mounted) return;
 
-    final record = await ComplianceEngine.analyzeDamage(
-      packagingType: widget.packagingType!,
-      boxPhotoPaths: _capturedBoxPaths,
-      boxPhotoLabels: _capturedBoxLabels,
-    );
+    final ScanRecord record;
+    try {
+      record = await ComplianceEngine.analyzeDamage(
+        packagingType: widget.packagingType!,
+        boxPhotoPaths: _capturedBoxPaths,
+        boxPhotoLabels: _capturedBoxLabels,
+      );
+    } on DamageCheckUnavailable catch (problem) {
+      await _reportDamageCheckProblem(problem);
+      return;
+    }
 
     await _finishAnalysis(record);
   }
@@ -1648,23 +1650,70 @@ class _CameraScreenState extends State<CameraScreen>
 
     final ocr = await _ocrLabelSlots();
 
-    final record = await ComplianceEngine.analyzeInspection(
-      textBySlot: ocr.textBySlot,
-      combinedText: ocr.combinedText,
-      packagingType: widget.packagingType!,
-      boxPhotoPaths: _capturedBoxPaths,
-      boxPhotoLabels: _capturedBoxLabels,
-      ocrConfidence: ocr.nameConfidence,
-      ocrTimings: ocr.timings,
-      dateCode: ocr.dateCode,
-      expirationDeclaredMissing:
-      _declaredMissing.contains(PhotoSlot.expiration),
-      ingredientsDeclaredMissing:
-      _declaredMissing.contains(PhotoSlot.ingredients),
-      onStageChange: _mapStageChange,
-    );
+    final ScanRecord record;
+    try {
+      record = await ComplianceEngine.analyzeInspection(
+        textBySlot: ocr.textBySlot,
+        combinedText: ocr.combinedText,
+        packagingType: widget.packagingType!,
+        boxPhotoPaths: _capturedBoxPaths,
+        boxPhotoLabels: _capturedBoxLabels,
+        ocrTimings: ocr.timings,
+        dateCode: ocr.dateCode,
+        expirationDeclaredMissing:
+        _declaredMissing.contains(PhotoSlot.expiration),
+        ingredientsDeclaredMissing:
+        _declaredMissing.contains(PhotoSlot.ingredients),
+        onStageChange: _mapStageChange,
+      );
+    } on DamageCheckUnavailable catch (problem) {
+      await _reportDamageCheckProblem(problem);
+      return;
+    }
 
     await _finishAnalysis(record);
+  }
+
+  /// Tells the user the scan has no result because the packaging could not be
+  /// inspected — see [DamageCheckUnavailable].
+  ///
+  /// No result screen and no save sheet: there is no verdict to show or keep.
+  /// The photos are left in place so "Try again" can re-run the check on them
+  /// without another round of shooting.
+  Future<void> _reportDamageCheckProblem(
+      DamageCheckUnavailable problem) async {
+    if (!mounted) return;
+    setState(() => _isProcessing = false);
+
+    final retry = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Damage check could not run'),
+        content: Text(
+            '${problem.message}\n\n'
+            'This scan has no result. The packaging was not inspected, so it '
+            'cannot be called compliant or non-compliant, and nothing was '
+            'saved.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Start over'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Try again'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+
+    if (retry == true) {
+      await _runAnalysis();
+    } else {
+      _discardCapturedPhotos();
+    }
   }
 
   void _mapStageChange(ScanStage stage) {
@@ -1704,37 +1753,6 @@ class _CameraScreenState extends State<CameraScreen>
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-  }
-
-  /// Mean ML Kit line confidence over [recognized], or null when the
-  /// recognizer did not report any.
-  ///
-  /// Null is the expected answer on Android: the plugin forwards
-  /// `Text.Line.getConfidence()` faithfully, but the on-device Latin
-  /// recognizer generally leaves it unset. That matters well beyond this
-  /// method — ComplianceEngine gates its semantic tier on
-  /// `ocrConfidence != null && ocrConfidence < threshold`, so a null here
-  /// means that tier never runs at all. The counts are logged rather than
-  /// assumed because it is a property of the ML Kit build on the device, not
-  /// something that can be settled by reading the source.
-  double? _meanLineConfidence(RecognizedText recognized) {
-    var sum = 0.0;
-    var withConfidence = 0;
-    var withoutConfidence = 0;
-    for (final block in recognized.blocks) {
-      for (final line in block.lines) {
-        final c = line.confidence;
-        if (c != null) {
-          sum += c;
-          withConfidence++;
-        } else {
-          withoutConfidence++;
-        }
-      }
-    }
-    debugPrint('OCR confidence: $withConfidence line(s) reported, '
-        '$withoutConfidence without');
-    return withConfidence == 0 ? null : sum / withConfidence;
   }
 
   Future<bool> _nameExists(String raw) => ScanStore.recordExists(raw);
@@ -2636,7 +2654,6 @@ class _CameraScreenState extends State<CameraScreen>
 class _OcrResult {
   final Map<PhotoSlot, String> textBySlot;
   final String combinedText;
-  final double? nameConfidence;
 
   final DateCode? dateCode;
 
@@ -2647,7 +2664,6 @@ class _OcrResult {
   const _OcrResult({
     required this.textBySlot,
     required this.combinedText,
-    required this.nameConfidence,
     this.dateCode,
     this.timings = ScanTimings.empty,
   });
@@ -3034,7 +3050,7 @@ class _ScanProgressCard extends StatelessWidget {
   static const _subtitles = {
     _ScanUiStage.extractingText: 'Reading text from your label photos',
     _ScanUiStage.matchingRegistry: 'Checking against the FDA database',
-    _ScanUiStage.classifying: 'Running the compliance model',
+    _ScanUiStage.classifying: 'Checking the expiry date and ingredient list',
     _ScanUiStage.checkingDamage: 'Inspecting the packaging for damage',
   };
 

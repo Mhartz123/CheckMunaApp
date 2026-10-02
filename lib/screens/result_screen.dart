@@ -84,7 +84,7 @@ class ResultScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'LABEL COMPLIANCE',
+                          'SCAN RESULT',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
@@ -95,8 +95,10 @@ class ResultScreen extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           record.statusBadge,
+                          textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 22,
+                            fontSize: 18,
+                            height: 1.25,
                             fontWeight: FontWeight.bold,
                             color: record.statusColor,
                           ),

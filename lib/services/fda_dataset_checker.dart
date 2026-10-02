@@ -183,12 +183,14 @@ class FdaDatasetChecker {
     for (final candidate in textWords) {
       if (candidate.length < _minFuzzyWordLength) continue;
       if ((candidate.length - target.length).abs() > 1) continue;
-      if (_withinOneEdit(target, candidate)) return true;
+      if (withinOneEdit(target, candidate)) return true;
     }
     return false;
   }
 
-  static bool _withinOneEdit(String a, String b) {
+  /// True if [a] and [b] are equal or one substitution, insertion or deletion
+  /// apart. Shared with DebugAdvisories.
+  static bool withinOneEdit(String a, String b) {
     if (a == b) return true;
     final la = a.length;
     final lb = b.length;

@@ -414,14 +414,13 @@ lib/
   services/
     compliance_engine.dart     Verdict logic for all three flows
     fda_dataset_checker.dart   Gated distinctive-word match against the advisory list
-    onnx_semantic_matcher.dart Optional last-ditch name matcher (see below)
     damage_detection_service.dart  YOLOv8n inference: letterbox 640 → NMS
     packaging_damage_service.dart  Per-packaging-type detector registry
     label_parser.dart          Turns per-slot OCR into structured fields
     scan_store.dart            Folder-per-record local storage
     report_service.dart        Submits results to the dashboard
-assets/                        FDA advisories, both ONNX models, tokenizer vocab
-scripts/                       Rebuild the FDA and tokenizer assets from source
+assets/                        FDA advisories and the ONNX damage models
+scripts/                       Rebuild the FDA advisory asset from source
 training/                      YOLOv8n Colab notebook for the damage detector
 ```
 
@@ -432,12 +431,6 @@ are already wired for all three types; nothing else needs to change.
 
 **Known rough edges**
 
-- `OnnxSemanticMatcher` (the fallback name matcher) ships with a model whose
-  embeddings are collapsed — roughly 1% Recall@1 — so anything reaching that
-  tier is likely to be mis-flagged. It only runs when name OCR confidence is
-  below 0.6, and it can be switched off entirely via
-  `ComplianceEngine._semanticMatcherEnabled`. Retrain and re-tune
-  `_similarityFloor` before relying on it.
 - The damage detector was trained on a small dataset (183 train / 15 val /
   9 test) — see `training/yolov8_damage_colab.ipynb`.
 - The Android application ID and launcher label are still the scaffold defaults

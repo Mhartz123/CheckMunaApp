@@ -32,8 +32,9 @@ class DateCode {
   /// See [DateCodeParser._pickRegistration].
   ///
   /// This is the number AS PRINTED. Nothing in the app verifies it against the
-  /// FDA register: the bundled index (`assets/fda_index_names.txt`) holds
-  /// product NAMES only, with no registration numbers to match against.
+  /// FDA register: the bundled advisory list
+  /// (`assets/data/fda_advisories.json`) holds product names and advisory
+  /// numbers, with no registration numbers to match against.
   final String? fdaRegistration;
 
   final DateCodeStatus status;

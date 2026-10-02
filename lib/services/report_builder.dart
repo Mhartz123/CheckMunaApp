@@ -101,7 +101,11 @@ class ReportBuilder {
         ref: ++ref,
         name: p.basename(d.path),
         date: record?.scannedAt ?? d.statSync().modified,
-        status: record?.statusLabel ?? '—',
+        // A damage scan whose detector never ran has no verdict to count —
+        // see [ScanRecordUi.hasNoVerdict].
+        status: record == null || record.hasNoVerdict
+            ? '—'
+            : record.statusLabel,
         keyword: record?.matchedKeyword ?? '—',
         dir: d,
         scan: record,
@@ -212,12 +216,16 @@ class ReportBuilder {
     }
   }
 
-  static pw.Widget _statusChip(String status) {
-    final (PdfColor fg, PdfColor bg, String label) = switch (status) {
-      'COMPLIANT' => (_green, _greenBg, 'COMPLIANT'),
-      'NON-COMPLIANT' => (_amber, _amberBg, 'NON-COMPLIANT'),
-      _ when _isWarning(status) => (_red, _redBg, 'WARNED'),
-      _ => (_muted, _bg, 'UNREADABLE'),
+  /// The colours key off the persisted status string; the text is the full
+  /// verdict ([ScanRecordUi.statusBadge]), which names what it is based on.
+  static pw.Widget _statusChip(_Record r) {
+    final status = r.status;
+    final label = r.scan?.statusBadge ?? 'UNREADABLE';
+    final (PdfColor fg, PdfColor bg) = switch (status) {
+      'COMPLIANT' => (_green, _greenBg),
+      'NON-COMPLIANT' => (_amber, _amberBg),
+      _ when _isWarning(status) => (_red, _redBg),
+      _ => (_muted, _bg),
     };
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 2),
@@ -286,7 +294,7 @@ class ReportBuilder {
                 ),
               ),
               pw.SizedBox(width: 6),
-              _statusChip(r.status),
+              _statusChip(r),
               pw.SizedBox(width: 6),
               pw.Text(_fmtDatetime(r.date),
                   style: pw.TextStyle(fontSize: 7.5, color: _muted)),
@@ -432,6 +440,8 @@ class ReportBuilder {
     final compliantRecords =
         records.where((r) => r.status == 'COMPLIANT').toList();
     final unreadable = records.where((r) => r.scan == null).toList();
+    final noVerdict =
+        records.where((r) => r.scan?.hasNoVerdict ?? false).toList();
     final generated = _fmtDatetime(DateTime.now());
 
     doc.addPage(
@@ -470,6 +480,14 @@ class ReportBuilder {
                 '${unreadable.length} record(s) could not be read and have no '
                 'status: ${unreadable.map((r) => '#${r.ref} ${r.name}').join(', ')}. '
                 'They are still listed under Scan Evidence.')),
+          ],
+          if (noVerdict.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            _emptyNote(_pdfSafe(
+                '${noVerdict.length} damage scan(s) have no result because the '
+                'damage check could not run: '
+                '${noVerdict.map((r) => '#${r.ref} ${r.name}').join(', ')}. '
+                'They are not counted above.')),
           ],
           pw.SizedBox(height: 24),
           _hotlineFooter(),
@@ -668,10 +686,10 @@ class ReportBuilder {
       border: pw.TableBorder.all(color: _border, width: 0.5),
       columnWidths: {
         0: const pw.FlexColumnWidth(0.6),
-        1: const pw.FlexColumnWidth(2.5),
-        2: const pw.FlexColumnWidth(1.5),
-        3: const pw.FlexColumnWidth(1.5),
-        4: const pw.FlexColumnWidth(2.5),
+        1: const pw.FlexColumnWidth(2.2),
+        2: const pw.FlexColumnWidth(1.3),
+        3: const pw.FlexColumnWidth(2.4),
+        4: const pw.FlexColumnWidth(2.1),
       },
       children: [
         pw.TableRow(
@@ -693,7 +711,8 @@ class ReportBuilder {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                _isWarning(r.status) ? 'WARNED' : 'NON-COMPLIANT',
+                r.scan?.statusBadge ??
+                    (_isWarning(r.status) ? 'WARNING' : 'NON-COMPLIANT'),
                 style: pw.TextStyle(
                     fontSize: 8.5,
                     fontWeight: pw.FontWeight.bold,

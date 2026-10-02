@@ -60,6 +60,10 @@ extension PackagingTypeX on PackagingType {
   /// Whether a missing ingredient list makes a product of this packaging
   /// non-compliant.
   ///
+  /// For a box or a bottle, on the footing that it is the product's only
+  /// primary packaging — the one place the list could be printed, so its
+  /// absence there is the product's absence of one.
+  ///
   /// Not for foil: a sachet or blister strip is usually a unit dose cut from a
   /// larger pack, and the full label — ingredient list included — lives on
   /// the outer carton rather than on the foil itself. Failing a foil for the
@@ -553,7 +557,19 @@ class ScanRecord {
 
 /// UI-facing presentation helpers for a [ScanRecord]'s status.
 extension ScanRecordUi on ScanRecord {
+  /// True for a damage-only scan saved while the detector could not run.
+  ///
+  /// New scans in that state are refused outright (ComplianceEngine throws
+  /// `DamageCheckUnavailable`), but records saved before that rule were stored
+  /// as compliant. Nothing was inspected, so they are shown as having no
+  /// result rather than a clean one.
+  bool get hasNoVerdict =>
+      kind == ScanKind.damage &&
+      status == ComplianceStatus.compliant &&
+      !damageCheck.available;
+
   Color get statusColor {
+    if (hasNoVerdict) return const Color(0xFF9E9E9E);
     switch (status) {
       case ComplianceStatus.compliant:
         return const Color(0xFF4CAF50);
@@ -565,6 +581,7 @@ extension ScanRecordUi on ScanRecord {
   }
 
   IconData get statusIcon {
+    if (hasNoVerdict) return Icons.help_outline;
     switch (status) {
       case ComplianceStatus.compliant:
         return Icons.check_circle;
@@ -575,46 +592,87 @@ extension ScanRecordUi on ScanRecord {
     }
   }
 
+  /// Whether [text] is the engine's packaging-damage tag or reason. Matched
+  /// loosely because the reason wording has changed across versions
+  /// ("Packaging damage detected.", "Packaging damage — Dent detected…") while
+  /// the phrase itself has not.
+  static bool _mentionsDamage(String text) =>
+      text.toLowerCase().contains('packaging damage');
+
+  /// Whether a non-compliant record failed the packaging check. A damage-only
+  /// scan has nothing else to fail; an inspection says so in its reasons.
+  bool get _failedPackaging {
+    if (status != ComplianceStatus.nonCompliant || !hasDamageData) return false;
+    if (kind == ScanKind.damage) return true;
+    return _mentionsDamage(matchedKeyword) || reasons.any(_mentionsDamage);
+  }
+
+  /// Whether a non-compliant record failed a label check. An inspection with
+  /// no reason that points at the packaging is read as a label failure, which
+  /// is all a record saved before the damage check existed could have been.
+  bool get _failedLabeling {
+    if (status != ComplianceStatus.nonCompliant || !hasLabelData) return false;
+    if (kind == ScanKind.label) return true;
+    return !_failedPackaging || reasons.any((r) => !_mentionsDamage(r));
+  }
+
+  /// Which FDA requirements this record's verdict speaks to: the ones it
+  /// failed when non-compliant, otherwise the ones the scan actually checked.
+  /// A label-only scan never looked at the packaging, so it does not get to
+  /// call the packaging compliant — and neither does an inspection whose
+  /// damage check could not run.
+  String get _requirements {
+    final bool labeling;
+    final bool packaging;
+    if (status == ComplianceStatus.nonCompliant) {
+      labeling = _failedLabeling;
+      packaging = _failedPackaging;
+    } else {
+      labeling = hasLabelData;
+      packaging = hasDamageData && damageCheck.available;
+    }
+    if (labeling && packaging) return 'labeling and packaging';
+    return packaging ? 'packaging' : 'labeling';
+  }
+
+  /// The verdict in full, e.g. "Compliant with FDA labeling requirements".
+  ///
+  /// Never the bare word "Compliant": on its own it reads as a verdict on the
+  /// whole product, when all the app has done is check the label and/or the
+  /// packaging it was shown. So every verdict names what it is based on.
   String get statusTitle {
+    if (hasNoVerdict) return 'No result — damage check could not run';
     switch (status) {
       case ComplianceStatus.compliant:
-        return 'Compliant';
+        return 'Compliant with FDA $_requirements requirements';
       case ComplianceStatus.nonCompliant:
-        return kind == ScanKind.damage ? 'Damaged' : 'Non-Compliant';
+        return 'Non-compliant based on FDA $_requirements requirements';
       case ComplianceStatus.warning:
-        return 'Warned';
+        return 'Warning based on FDA advisory';
     }
   }
 
-  /// What the UI prints for this record's verdict, in the four words the app
-  /// is allowed to use: Compliant, Non-Compliant, Warned, Damaged.
+  /// [statusTitle] in the upper-case form used for the result headline, the
+  /// records-list pill and the PDF report.
   ///
   /// Kept separate from [statusLabel], which is the string written to disk and
   /// matched on load — renaming that would strand every saved record.
   ///
   /// The app never says the FDA verified, approved or cleared anything. It
-  /// compares what is printed on the pack against the FDA's published registry
-  /// and advisory lists; a pack that matches nothing on those lists has passed
-  /// this app's checks, which is not the FDA passing judgement on the pack in
-  /// the user's hand. "FDA VERIFIED" claimed exactly that, and a user acting
-  /// on it would be acting on an assurance nobody gave.
-  String get statusBadge {
-    switch (status) {
-      case ComplianceStatus.compliant:
-        return 'COMPLIANT';
-      case ComplianceStatus.nonCompliant:
-        return kind == ScanKind.damage ? 'DAMAGED' : 'NON-COMPLIANT';
-      case ComplianceStatus.warning:
-        return 'WARNED';
-    }
-  }
+  /// compares what is printed on the pack against the FDA's published
+  /// requirements and advisory lists; passing those checks is not the FDA
+  /// passing judgement on the pack in the user's hand.
+  String get statusBadge => statusTitle.toUpperCase();
 
   String get note {
+    if (hasNoVerdict) {
+      return 'The damage check could not run when this scan was taken, so the packaging was never inspected. This record has no result — scan the product again.';
+    }
     switch (status) {
       case ComplianceStatus.compliant:
-        return 'This label passed every check the app runs. That is a check of what is printed on the packaging against FDA registry and advisory data — not an FDA endorsement of this pack. Follow the product instructions and ask a pharmacist or physician about safe dosage.';
+        return 'This scan passed the $_requirements checks this app runs. That covers only what was scanned — it is not an FDA endorsement, and it says nothing about the product\'s contents or safety. Follow the product instructions and ask a pharmacist or physician about safe dosage.';
       case ComplianceStatus.nonCompliant:
-        return 'This label failed one or more of the checks this app runs and the product is inadvisable to consume. Please refer to the local FDA hotline near you to report this occurrence.';
+        return 'This scan failed one or more of the $_requirements checks this app runs and the product is inadvisable to consume. Please refer to the local FDA hotline near you to report this occurrence.';
       case ComplianceStatus.warning:
         return 'This product matched an FDA advisory and needs manual checking before sale or use. Please refer to the local FDA hotline near you to confirm its status.';
     }

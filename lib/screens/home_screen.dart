@@ -112,7 +112,7 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.inventory_2_outlined,
                       title: 'Say what you are holding',
                       description:
-                      'Every check asks for the packaging type first — Box, Foil, or Bottle — so the right check runs. Foil is not required to carry an ingredient list, so a missing one is not flagged. Any check that reads a label also offers a reading mode on this screen: Accurate (the default) or Fast.',
+                      'Every check asks for the packaging type first — Box, Foil, or Bottle — so the right check runs. An ingredient list is required only on a box or bottle, and only when that box or bottle is the product\'s only primary packaging; foil (sachets, blister packs) is not required to carry one, so a missing list on foil is disregarded. Any check that reads a label also offers a reading mode on this screen: Accurate (the default) or Fast.',
                     ),
                     _Step(
                       number: '3',
@@ -126,7 +126,7 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.fact_check_outlined,
                       title: 'Read the result',
                       description:
-                      'After the last shot the app analyses on its own — no button to press. It shows Compliant, Non-Compliant, Warned, or (for a damage-only scan) Damaged, with the reasons behind the verdict. The app never says a product is FDA-approved: it checks what is printed on the pack against FDA registry and advisory data, which is not the same thing.',
+                      'After the last shot the app analyses on its own — no button to press. The result always names what it is based on — compliant with, or non-compliant based on, FDA labeling and/or packaging requirements, or a warning based on an FDA advisory — with the reasons behind the verdict. If the damage check cannot run, the app reports that as a problem and gives no result rather than calling the packaging compliant. The app never says a product is FDA-approved: it checks what is printed on the pack against FDA registry and advisory data, which is not the same thing.',
                     ),
                     _Step(
                       number: '5',
@@ -168,7 +168,7 @@ class HomeScreen extends StatelessWidget {
                       caption:
                       'Under the step text, on those two steps only. Changes the result.',
                       description:
-                      'Tap this when the packaging genuinely does not print that element, or prints it in a state nobody can read — rubbed off, smudged, or printed over. It skips the shot and records the element as missing or unreadable, which counts against the product and makes the scan Non-Compliant. If the text is there and legible but simply hard to photograph, keep trying instead: move closer, change the frame size, or improve the light.',
+                      'Tap this when the packaging genuinely does not print that element, or prints it in a state nobody can read — rubbed off, smudged, or printed over. It skips the shot and records the element as missing or unreadable, which counts against the product and makes the scan non-compliant on labeling. For the ingredient list this applies only to a box or bottle that is the product\'s only primary packaging — on foil a missing list is disregarded. If the text is there and legible but simply hard to photograph, keep trying instead: move closer, change the frame size, or improve the light.',
                     ),
                     const SizedBox(height: 24),
 

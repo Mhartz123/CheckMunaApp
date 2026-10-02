@@ -8,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../services/app_prefs.dart';
 import '../widgets/capture_tips.dart';
 import '../widgets/compliance_legend.dart';
+import '../widgets/debug_advisory_sheet.dart';
 import '../widgets/theme_toggle_button.dart';
 import 'camera_screen.dart';
 import 'consent_screen.dart';
@@ -172,15 +173,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: AppColors.accentLight,
-                      borderRadius: BorderRadius.circular(9),
+                  // Seven quick taps on the logo open the hidden debug
+                  // advisory list. Nothing shows until then.
+                  DebugAdvisoryTrigger(
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: AppColors.accentLight,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: const Icon(Icons.qr_code_scanner,
+                          color: Colors.white, size: 18),
                     ),
-                    child: const Icon(Icons.qr_code_scanner,
-                        color: Colors.white, size: 18),
                   ),
                   const SizedBox(width: 10),
                   // Was `const Expanded(...)` — dropped since AppColors.text
@@ -667,7 +672,7 @@ class _RecentScanRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     '$statusTitle · $_when',
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13,

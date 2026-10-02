@@ -16,8 +16,6 @@ const Map<PhotoSlot, String> _label = <PhotoSlot, String>{
 Future<ScanRecord> _analyze(DateCode? dateCode) => ComplianceEngine.analyzeLabel(
       textBySlot: _label,
       combinedText: _label.values.join('\n'),
-      // Null keeps the semantic tier from firing, so no ONNX model is loaded.
-      ocrConfidence: null,
       dateCode: dateCode,
     );
 

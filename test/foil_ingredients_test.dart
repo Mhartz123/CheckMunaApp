@@ -3,6 +3,7 @@ import 'package:ui_prototype/models/scan_record.dart';
 import 'package:ui_prototype/services/compliance_engine.dart';
 import 'package:ui_prototype/services/date_code_parser.dart';
 import 'package:ui_prototype/services/fda_dataset_checker.dart';
+import 'package:ui_prototype/services/packaging_damage_service.dart';
 
 /// Foil is not required to carry an ingredient list — a sachet or blister
 /// strip is usually cut from a larger pack whose carton holds the full label.
@@ -29,12 +30,21 @@ Future<ScanRecord> _label(
     ComplianceEngine.analyzeLabel(
       textBySlot: _foilLabel,
       combinedText: _foilLabel.values.join('\n'),
-      // Null keeps the semantic tier from firing, so no ONNX model is loaded.
-      ocrConfidence: null,
       dateCode: _inDate,
       ingredientsDeclaredMissing: declaredMissing,
       packagingType: type,
     );
+
+/// Stands in for the on-device model: every photo inspected, nothing found.
+class _CleanDetector extends PackagingDamageDetector {
+  @override
+  Future<DamageCheckResult> check(List<String> photoPaths,
+          {List<String>? photoLabels}) async =>
+      const DamageCheckResult(
+        available: true,
+        message: 'No packaging damage detected.',
+      );
+}
 
 void main() {
   setUpAll(() async {
@@ -91,7 +101,6 @@ void main() {
       final record = await ComplianceEngine.analyzeLabel(
         textBySlot: _foilLabel,
         combinedText: _foilLabel.values.join('\n'),
-        ocrConfidence: null,
         dateCode: DateCode(
           expiry: DateTime(2020, 1, 31),
           status: DateCodeStatus.parsed,
@@ -103,15 +112,23 @@ void main() {
   });
 
   group('inspection mode', () {
+    // A damage check that cannot run now refuses the whole scan, so the
+    // packaging has to come back clean for the label side alone to decide.
+    setUp(() {
+      PackagingDamageService.register(PackagingType.foil, _CleanDetector());
+      PackagingDamageService.register(PackagingType.box, _CleanDetector());
+    });
+    tearDown(() {
+      PackagingDamageService.register(PackagingType.foil, FoilDamageDetector());
+      PackagingDamageService.register(PackagingType.box, BoxDamageDetector());
+    });
+
     Future<ScanRecord> inspect(PackagingType type) =>
         ComplianceEngine.analyzeInspection(
           textBySlot: _foilLabel,
           combinedText: _foilLabel.values.join('\n'),
           packagingType: type,
-          // No photos: the damage check reports itself unavailable, which
-          // does not fail a scan, so the label side alone decides here.
-          boxPhotoPaths: const <String>[],
-          ocrConfidence: null,
+          boxPhotoPaths: const <String>['front.jpg'],
           dateCode: _inDate,
         );
 

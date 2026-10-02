@@ -1247,7 +1247,9 @@ class _RecordCard extends StatelessWidget {
     final badge = record?.statusBadge ?? '—';
     final keyword = record?.matchedKeyword ?? '—';
     final packagingType = record?.packagingType;
-    final visuals = _statusVisuals(status);
+    // A scan with no result draws like an unreadable one, not a compliant one.
+    final visuals =
+        _statusVisuals(record?.hasNoVerdict == true ? '—' : status);
 
     return GestureDetector(
       onTap: onTap,
@@ -1352,19 +1354,23 @@ class _RecordCard extends StatelessWidget {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: visuals.pillBg,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            badge,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              color: visuals.pillText,
-                              fontWeight: FontWeight.w700,
+                        // Flexible: the verdict names what it is based on,
+                        // so it is long enough to need wrapping.
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: visuals.pillBg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              badge,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: visuals.pillText,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ),
